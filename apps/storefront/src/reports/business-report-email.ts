@@ -81,6 +81,11 @@ function buildSections(report: BusinessReport, vs: string): Section[] {
         { label: "期间打包", value: count(warehouse.packed.current), change: change(warehouse.packed, vs) },
         { label: "期间交付完成", value: count(warehouse.completed.current), change: change(warehouse.completed, vs) },
         { label: "配送失败", value: count(warehouse.deliveryFailures) },
+        {
+          label: warehouse.codelessCompletions ? "⚠ 无码补登" : "无码补登",
+          value: `${count(warehouse.codelessCompletions)} 单`,
+          hint: "超级管理员没用取货码/配送码、直接补登已交付的订单"
+        },
         { label: "现在待拣货", value: count(warehouse.queues.toPick) },
         { label: "现在待打包", value: count(warehouse.queues.toPack) },
         { label: "已打包未发出", value: count(warehouse.queues.packedNotSent) },

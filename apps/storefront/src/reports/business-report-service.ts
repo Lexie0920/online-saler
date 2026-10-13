@@ -77,6 +77,8 @@ export type BusinessReport = {
     packed: Comparable;
     completed: Comparable;
     deliveryFailures: number;
+    /** 无码补登: orders a super admin completed without the customer's code, in the period. */
+    codelessCompletions: number;
     byEmployee: Array<{ name: string; picked: number; packed: number }>;
   };
   /** 分销团队增长: see affiliate-team.ts for every definition. */
@@ -132,7 +134,7 @@ const QUEUE_STAGES = {
   exceptions: [FulfillmentStatus.EXCEPTION]
 } satisfies Record<keyof BusinessReport["warehouse"]["queues"], FulfillmentStatus[]>;
 
-type Range = { gte: Date; lt: Date };
+export type Range = { gte: Date; lt: Date };
 
 export async function collectBusinessReport(period: ReportPeriod, now = new Date()): Promise<BusinessReport> {
   const current: Range = { gte: period.start, lt: period.end };
@@ -288,9 +290,9 @@ async function collectInventory(current: Range, previous: Range, now: Date): Pro
   };
 }
 
-async function collectWarehouse(current: Range, previous: Range, now: Date): Promise<BusinessReport["warehouse"]> {
+export async function collectWarehouse(current: Range, previous: Range, now: Date): Promise<BusinessReport["warehouse"]> {
   const stages = Object.entries(QUEUE_STAGES) as Array<[keyof typeof QUEUE_STAGES, FulfillmentStatus[]]>;
-  const [queueCounts, overdue, packedNow, packedBefore, completedNow, completedBefore, deliveryFailures, pickers, packers] =
+  const [queueCounts, overdue, packedNow, packedBefore, completedNow, completedBefore, deliveryFailures, codelessCompletions, pickers, packers] =
     await Promise.all([
       Promise.all(stages.map(([, statuses]) => prisma.orderFulfillment.count({ where: { status: { in: statuses } } }))),
       prisma.orderFulfillment.count({
@@ -304,6 +306,9 @@ async function collectWarehouse(current: Range, previous: Range, now: Date): Pro
       prisma.orderFulfillment.count({ where: { completedAt: current } }),
       prisma.orderFulfillment.count({ where: { completedAt: previous } }),
       prisma.orderFulfillment.count({ where: { deliveryFailedAt: current } }),
+      // The event the operations API writes for 无码补登 (CODELESS_COMPLETION_ACTION
+      // in apps/api/src/operations/operations-fulfillment-state.ts).
+      prisma.fulfillmentEvent.count({ where: { action: "CODELESS_COMPLETION", createdAt: current } }),
       prisma.orderFulfillment.groupBy({
         by: ["assignedPickerEmployeeId"],
         where: { pickedAt: current, assignedPickerEmployeeId: { not: null } },
@@ -337,6 +342,7 @@ async function collectWarehouse(current: Range, previous: Range, now: Date): Pro
     packed: { current: packedNow, previous: packedBefore },
     completed: { current: completedNow, previous: completedBefore },
     deliveryFailures,
+    codelessCompletions,
     byEmployee: [...work.entries()]
       .map(([id, counts]) => ({ name: names.get(id) ?? "Unknown", ...counts }))
       .sort((a, b) => b.picked + b.packed - (a.picked + a.packed))

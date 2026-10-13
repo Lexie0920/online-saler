@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { buildAffiliateTeam, matchStaffAffiliates, normalizePhone, type AffiliateRow, type StaffRow } from "./affiliate-team";
 import { change, renderBusinessReportEmail } from "./business-report-email";
-import type { BusinessReport } from "./business-report-service";
+import { prisma } from "@online-saler/database";
+import { collectWarehouse, type BusinessReport } from "./business-report-service";
 import { reportRecipients, sendReportEmail } from "./email-sender";
 import { reportPeriod } from "./report-period";
 
@@ -238,6 +239,7 @@ function sampleReport(): BusinessReport {
       packed: same(4),
       completed: same(3),
       deliveryFailures: 0,
+      codelessCompletions: 2,
       byEmployee: [{ name: "Wanjiku", picked: 3, packed: 4 }]
     },
     affiliates: affiliateTeam,
@@ -263,6 +265,11 @@ assert.ok(email.html.includes("比前一天↑ 100%"), "revenue doubled against 
 assert.ok(email.html.includes("⚠ 待人工核对的付款"), "a payment waiting for review is flagged");
 assert.ok(email.html.includes("⚠ 付款超过 48 小时还没交付"), "late orders are flagged");
 assert.ok(!email.html.includes("⚠ 异常订单"), "no exceptions, no warning");
+// 无码补登 is counted so the owner sees how often the code is skipped.
+assert.ok(email.text.includes("⚠ 无码补登：2 单"), "code-less completions are counted and flagged");
+const noCodeless = sampleReport();
+noCodeless.warehouse = { ...noCodeless.warehouse, codelessCompletions: 0 };
+assert.ok(renderBusinessReportEmail(noCodeless).text.includes("- 无码补登：0 单"), "none, no warning");
 
 // The affiliate team section.
 for (const label of ["推广员总数", "新增推广员", "活跃推广员", "总点击", "点击→下单转化率", "推广员排行（前 10）", "⚠ 现在沉睡的推广员"]) {
@@ -332,6 +339,26 @@ const fakeFetch = (async (url: string, init: RequestInit) => {
     sendReportEmail(outgoing, { RESEND_API_KEY: "re_bad", BUSINESS_REPORT_EMAIL_TO: "a@example.com" }, refusing),
     /HTTP 401\): invalid key/
   );
+
+  // 无码补登 is read from the fulfillment events in the period, by its action.
+  const eventCounts: unknown[] = [];
+  const db = prisma as unknown as Record<string, Record<string, unknown>>;
+  const saved = { count: db.orderFulfillment.count, groupBy: db.orderFulfillment.groupBy, eventCount: db.fulfillmentEvent.count, employees: db.employee.findMany };
+  db.orderFulfillment.count = async () => 0;
+  db.orderFulfillment.groupBy = async () => [];
+  db.fulfillmentEvent.count = async (args: unknown) => { eventCounts.push(args); return 3; };
+  db.employee.findMany = async () => [];
+  try {
+    const range = { gte: daily.start, lt: daily.end };
+    const warehouse = await collectWarehouse(range, { gte: daily.previousStart, lt: daily.previousEnd }, mondayMorning);
+    assert.equal(warehouse.codelessCompletions, 3);
+    assert.deepEqual(eventCounts, [{ where: { action: "CODELESS_COMPLETION", createdAt: range } }]);
+  } finally {
+    db.orderFulfillment.count = saved.count;
+    db.orderFulfillment.groupBy = saved.groupBy;
+    db.fulfillmentEvent.count = saved.eventCount;
+    db.employee.findMany = saved.employees;
+  }
 
   console.log("business report tests ok");
 })().catch((error) => {
