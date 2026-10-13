@@ -316,8 +316,14 @@ test("dispatching to a rider texts a code that appears nowhere staff can read it
   const write = h.fulfillmentWrites.find((data) => typeof data.deliveryCodeHash === "string");
   assert.ok(write, "a code hash is stored");
   assert.match(String(write!.deliveryCodeHash), /^pbkdf2_sha256\$/);
-  assert.ok(!String(write!.deliveryCodeHash).includes(digits!));
-  assert.ok(!JSON.stringify(h.events).includes(digits!), "no event records the code");
+  // A random hash or a timestamp can contain any four digits by chance, so look
+  // for the code as a value or next to the word "code", not as a substring.
+  const hash = String(write!.deliveryCodeHash);
+  assert.notEqual(hash, digits);
+  assert.ok(!hash.split("$").includes(digits!), "the hash does not carry the code as a field");
+  const eventText = JSON.stringify(h.events);
+  assert.ok(!eventText.includes(`"${digits}"`), "no event stores the code as a value");
+  assert.ok(!new RegExp(`code\\D{0,3}${digits}`, "i").test(eventText), "no event records the code");
 
   // One column holds the readable copy, and it is the one the customer's own
   // order page reads. Anywhere else -- an event, a note, a second column -- it
