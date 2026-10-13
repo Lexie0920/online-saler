@@ -305,10 +305,13 @@ const orderWorkflowPermissions: OperationsPermission[] = [
   ["warehouse-locations.edit-capacity", "edit-capacity", "Edit warehouse location capacity."],
   ["warehouse-locations.move-product", "move-product", "Move eligible inventory between warehouse locations."],
   ["inventory-overview.view", "inventory-overview", "View the real-time warehouse inventory overview."],
-  ["analytics.warehouse.view", "warehouse-analytics", "Open advanced warehouse analytics in Metabase."]
+  ["analytics.warehouse.view", "warehouse-analytics", "Open advanced warehouse analytics in Metabase."],
+  // 2026-10-14: weekly manual M-Pesa payouts. Only SUPER_ADMIN and FINANCE.
+  ["finance.payout", "payout", "Open the weekly payout sheet and record an M-Pesa payout already sent by hand. Never moves money."]
 ].map(([code, action, description]) => ({
   code,
   module: code.startsWith("analytics.") ? "analytics"
+    : code.startsWith("finance.") ? "affiliate"
     : code.startsWith("customer-service.") ? "customer-service"
       : code.startsWith("orders.") || code.startsWith("rider.") || code.startsWith("riders.") ? "orders"
         : code.startsWith("nodes.") || code.startsWith("notifications.") ? "system"
@@ -585,7 +588,9 @@ export const OPERATIONS_ROLE_BLUEPRINTS: OperationsRoleBlueprint[] = [
       "action.customer-service.view",
       "page.customer-service.refunds",
       "customer-service.refund-approve",
-      "nodes.view"
+      "nodes.view",
+      // Finance pays the week: commissions and rider fees, by hand on M-Pesa.
+      "finance.payout"
     ]
   },
   {

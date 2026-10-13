@@ -256,7 +256,8 @@ export const permissions = [
     ["nodes.view", "system", "view", "View fulfillment nodes."],
     ["nodes.manage", "system", "manage", "Create, edit, enable and disable fulfillment nodes."],
     ["notifications.view", "system", "view", "View the outbound notification outbox."],
-    ["notifications.retry", "system", "retry", "Retry or cancel a queued notification."]
+    ["notifications.retry", "system", "retry", "Retry or cancel a queued notification."],
+    ["finance.payout", "affiliate", "payout", "Open the weekly payout sheet and record an M-Pesa payout already sent by hand. Never moves money."]
   ].map(([code, module, action, description]) => ({ code, module, scope: "ACTION", action, description }))
 ];
 
@@ -326,7 +327,7 @@ export const roles = [
     code: "FINANCE",
     name: "Finance",
     description: "Payment, payout, commission, and export access.",
-    permissions: unique(["action.affiliate.approve","action.affiliate.export","action.affiliate.view","action.analytics.export","action.analytics.view","action.customer-service.view","action.orders.export","action.orders.view","analytics.warehouse.view","customer-service.refund-approve","module.affiliate","module.analytics","module.customer-service","module.orders","nodes.view","orders.payment-review","orders.refund","orders.view","page.customer-service.refunds","page.orders.all","page.orders.deposits","page.orders.finance","page.orders.payment-review"])
+    permissions: unique(["action.affiliate.approve","action.affiliate.export","action.affiliate.view","action.analytics.export","action.analytics.view","action.customer-service.view","action.orders.export","action.orders.view","analytics.warehouse.view","customer-service.refund-approve","finance.payout","module.affiliate","module.analytics","module.customer-service","module.orders","nodes.view","orders.payment-review","orders.refund","orders.view","page.customer-service.refunds","page.orders.all","page.orders.deposits","page.orders.finance","page.orders.payment-review"])
   },
   {
     code: "DATA_ANALYST",
