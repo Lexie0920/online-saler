@@ -49,8 +49,14 @@ import {
 import { ProductImageStorageService } from "../product/product-image-storage.service";
 import { OperationsAccessService } from "./operations-access.service";
 import {
+  CODELESS_COMPLETION_ACTION,
+  CODELESS_COMPLETION_NOTE_MIN_LENGTH,
+  CODELESS_COMPLETION_REASONS,
+  REASSIGN_REASON_MIN_LENGTH,
   buildPackageCode,
+  canCompleteWithoutCode,
   canResolveFulfillmentException,
+  type CodelessCompletionReason,
   canTransitionFulfillment,
   canWorkWarehouseTask,
   holderForStatus,
@@ -185,6 +191,13 @@ export function fulfillmentStatusFilter(value?: string): FulfillmentStatus[] {
 
 export type AdminInput = { adminUserId?: string; note?: string };
 export type EmployeeInput = AdminInput & { employeeId?: string };
+/** Moving work that is already under way to somebody else. The reason is required. */
+export type ReassignInput = EmployeeInput & { reason?: string };
+export type BatchReassignInput = ReassignInput & { orderIds?: unknown };
+/** 无码补登: a super admin closes an order whose code was never read out. */
+export type CodelessCompletionInput = AdminInput & { reasonCode?: string };
+/** How many orders one batch reassignment may touch. A page holds 30. */
+export const BATCH_REASSIGN_LIMIT = 100;
 export type ScanInput = AdminInput & { barcode?: string };
 export type PackingInput = EmployeeInput & { packagingMethod?: PackagingMethod; packageCount?: number };
 export type PickupInput = AdminInput & { verificationMethod?: PickupVerificationMethod; verificationValue?: string };
@@ -434,6 +447,11 @@ export class OperationsFulfillmentService {
       throw new BadRequestException("Picker can only be assigned before picking is complete.");
     }
     if (fulfillment.assignedPickerEmployeeId === employee.id) return this.orderDetail(orderId, input.adminUserId);
+    // Taking a task off somebody who has started it is a reassignment, and a
+    // reassignment says why (改派拣货员, reassign-picker).
+    if (fulfillment.status === FulfillmentStatus.PICKING && fulfillment.assignedPickerEmployeeId) {
+      throw new BadRequestException("Picking has already started. Use reassign-picker and give a reason.");
+    }
     await prisma.$transaction(async (tx) => {
       await tx.orderFulfillment.update({ where: { id: fulfillment.id }, data: { assignedPickerEmployeeId: employee.id } });
       await this.createEvent(tx, {
@@ -449,6 +467,196 @@ export class OperationsFulfillmentService {
       });
     });
     return this.orderDetail(orderId, input.adminUserId);
+  }
+
+  /**
+   * 改派拣货员: hands a picking task that is already under way to somebody else.
+   *
+   * A task belongs to whoever claimed it, and the scan refuses everyone else —
+   * which is right until that person leaves with sixteen orders in their name.
+   * Only a supervisor (orders.assign-picker) can move it, a reason is required,
+   * and the garments already scanned stay scanned: the scan proved the right
+   * garment was in the trolley, and that does not stop being true because a
+   * different person finishes the order. The new picker scans the rest.
+   */
+  async reassignPicker(orderId: string, input: ReassignInput) {
+    const actor = await this.adminForPermission(input.adminUserId, "orders.assign-picker");
+    await this.reassignWorker(orderId, input, actor, "picker");
+    return this.orderDetail(orderId, input.adminUserId);
+  }
+
+  /**
+   * 改派打包员: the same for a parcel whose packer was named, or who already
+   * pressed 开始打包. Packing has no per-item progress to keep; the start time
+   * stays, and the new packer is recorded as the one packing it so 完成打包
+   * works for them without a supervisor.
+   */
+  async reassignPacker(orderId: string, input: ReassignInput) {
+    const actor = await this.adminForPermission(input.adminUserId, "orders.assign-packer");
+    await this.reassignWorker(orderId, input, actor, "packer");
+    return this.orderDetail(orderId, input.adminUserId);
+  }
+
+  /**
+   * 批量改派: moves every selected order to one person in one go. Orders still
+   * being picked go to them as picker, orders waiting to be packed as packer.
+   * One order failing does not stop the rest, and each failure is named.
+   */
+  async reassignBatch(input: BatchReassignInput) {
+    await this.adminForPermission(input.adminUserId, "orders.assign-picker");
+    const orderIds = Array.isArray(input.orderIds)
+      ? [...new Set(input.orderIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))]
+      : [];
+    if (!orderIds.length) throw new BadRequestException("Choose at least one order to reassign.");
+    if (orderIds.length > BATCH_REASSIGN_LIMIT) throw new BadRequestException(`Reassign at most ${BATCH_REASSIGN_LIMIT} orders at a time.`);
+    // Checked once up front so a missing reason or person fails the whole
+    // request instead of failing every order with the same message.
+    requireReassignReason(input.reason);
+    await this.requireEmployee(input.employeeId);
+
+    const results: Array<{ orderId: string; orderNumber: string | null; ok: boolean; role?: "picker" | "packer"; error?: string }> = [];
+    for (const orderId of orderIds) {
+      let orderNumber: string | null = null;
+      try {
+        await this.assertOrderInStoreScope(orderId, input.adminUserId);
+        const order = await this.requireOrderWithTask(orderId);
+        orderNumber = order.orderNumber;
+        const status = order.fulfillment!.status;
+        const role = status === FulfillmentStatus.READY_TO_PACK ? "packer" : "picker";
+        const actor = await this.adminForPermission(input.adminUserId, role === "packer" ? "orders.assign-packer" : "orders.assign-picker");
+        await this.reassignWorker(orderId, input, actor, role, order);
+        results.push({ orderId, orderNumber, ok: true, role });
+      } catch (caught) {
+        results.push({ orderId, orderNumber, ok: false, error: errorMessage(caught) });
+      }
+    }
+    const succeeded = results.filter((row) => row.ok).length;
+    return { total: results.length, succeeded, failed: results.length - succeeded, results };
+  }
+
+  private async reassignWorker(
+    orderId: string,
+    input: ReassignInput,
+    actor: Pick<EventInput, "actorAdminUserId" | "actorEmployeeId">,
+    role: "picker" | "packer",
+    loaded?: OrderDetail
+  ) {
+    const reason = requireReassignReason(input.reason);
+    const employee = await this.requireEmployee(input.employeeId);
+    const order = loaded ?? await this.requireOrderWithTask(orderId);
+    const fulfillment = order.fulfillment!;
+    const picker = role === "picker";
+    const allowed: FulfillmentStatus[] = picker
+      ? [FulfillmentStatus.PAID, FulfillmentStatus.PICKING]
+      : [FulfillmentStatus.READY_TO_PACK];
+    if (!allowed.includes(fulfillment.status)) {
+      throw new BadRequestException(picker
+        ? `Only an order waiting to be picked or being picked can change picker; this one is ${fulfillment.status}.`
+        : `Only a parcel waiting to be packed can change packer; this one is ${fulfillment.status}.`);
+    }
+    const previousId = picker ? fulfillment.assignedPickerEmployeeId : fulfillment.assignedPackerEmployeeId;
+    const previousName = (picker ? fulfillment.assignedPicker?.name : fulfillment.assignedPacker?.name) ?? null;
+    // Already theirs: nothing to move and nothing to write.
+    if (previousId === employee.id && (picker || !fulfillment.packingStartedAt || fulfillment.packingStartedByEmployeeId === employee.id)) return;
+    const verified = fulfillment.items.filter((item) => item.status === FulfillmentItemStatus.VERIFIED).length;
+
+    await prisma.$transaction(async (tx) => {
+      await lockReservationOrder(tx, orderId);
+      const current = await tx.orderFulfillment.findUnique({ where: { id: fulfillment.id } });
+      if (!current) throw new NotFoundException("Fulfillment was not found.");
+      const currentId = picker ? current.assignedPickerEmployeeId : current.assignedPackerEmployeeId;
+      if (current.status !== fulfillment.status || currentId !== previousId) {
+        throw new ConflictException("This order changed while you were reassigning it. Refresh and try again.");
+      }
+      const data: Prisma.OrderFulfillmentUncheckedUpdateInput = picker
+        ? { assignedPickerEmployeeId: employee.id }
+        : {
+            assignedPackerEmployeeId: employee.id,
+            // The start time stays; the person packing it is now the new packer.
+            ...(current.packingStartedAt ? { packingStartedByEmployeeId: employee.id } : {})
+          };
+      await tx.orderFulfillment.update({ where: { id: fulfillment.id }, data });
+      const progress = picker ? `已核对 ${verified}/${fulfillment.items.length} 件，保留不重扫` : current.packingStartedAt ? "已开始打包，开始时间保留" : "尚未开始打包";
+      await this.createEvent(tx, {
+        // No idempotency key: moving A → B → A → B is four facts, not one.
+        fulfillmentId: fulfillment.id,
+        orderId,
+        ...actor,
+        relatedEmployeeId: employee.id,
+        action: picker ? "REASSIGN_PICKER" : "REASSIGN_PACKER",
+        oldStatus: current.status,
+        newStatus: current.status,
+        note: `${previousName ?? "未分配"} → ${employee.name} · 原因：${reason} · ${progress}`
+      });
+      await tx.auditLog.create({
+        data: {
+          actorType: ActorType.EMPLOYEE,
+          actorId: actor.actorEmployeeId ?? null,
+          actorAdminUserId: actor.actorAdminUserId ?? null,
+          sourceApp: SourceApp.OPERATIONS,
+          module: "ORDERS",
+          entityType: "OrderFulfillment",
+          entityId: fulfillment.id,
+          action: picker ? "REASSIGN_PICKER" : "REASSIGN_PACKER",
+          beforeJson: { orderId, employeeId: previousId, employeeName: previousName, status: current.status, verifiedItems: verified },
+          afterJson: { orderId, employeeId: employee.id, employeeName: employee.name, status: current.status, verifiedItems: verified },
+          reason
+        }
+      });
+    });
+  }
+
+  /**
+   * 无码补登: a super admin records that a parcel already reached its customer
+   * although nobody read out the pickup or delivery code — staff handed it over
+   * in person, or the customer took it and lost the code.
+   *
+   * It is the only way to complete without a code, and it is narrow on purpose:
+   * the SUPER_ADMIN role itself (not a permission that could be granted to a
+   * store), a reason, a written note, and a parcel that is sealed and paid for.
+   * It then goes through the same completion as a coded handover — stock marked
+   * delivered, completedAt set, the customer told — so commission is confirmed
+   * as usual. The customer-code timestamp stays empty, which is what tells this
+   * completion apart from a coded one everywhere it is looked up.
+   */
+  async completeWithoutCode(orderId: string, input: CodelessCompletionInput) {
+    const actor = await this.superAdminActor(input.adminUserId);
+    const reasonCode = input.reasonCode?.trim() as CodelessCompletionReason | undefined;
+    if (!reasonCode || !Object.prototype.hasOwnProperty.call(CODELESS_COMPLETION_REASONS, reasonCode)) {
+      throw new BadRequestException("Choose why the order is completed without the customer's code.");
+    }
+    const note = input.note?.trim() ?? "";
+    if (note.length < CODELESS_COMPLETION_NOTE_MIN_LENGTH) {
+      throw new BadRequestException(`Write what happened (at least ${CODELESS_COMPLETION_NOTE_MIN_LENGTH} characters) before completing without a code.`);
+    }
+    const order = await this.requireOrderWithTask(orderId);
+    const fulfillment = order.fulfillment!;
+    if (fulfillment.status === FulfillmentStatus.COMPLETED) return this.orderDetail(orderId, input.adminUserId);
+    if (!canCompleteWithoutCode(fulfillment.status)) {
+      throw new BadRequestException(`An order at ${fulfillment.status} cannot be completed without a code. It has to be packed first, and a failed delivery has to come back to its node.`);
+    }
+    const reasonLabel = CODELESS_COMPLETION_REASONS[reasonCode];
+    const pickup = order.fulfillmentMethod === FulfillmentMethod.PICKUP;
+    await this.completeOrder(order, actor, CODELESS_COMPLETION_ACTION, `无码补登 · ${reasonLabel} · ${note}`, pickup
+      ? { pickupConfirmedByEmployeeId: actor.actorEmployeeId, pickupNote: `无码补登：${note}` }
+      : { deliveryCompletionMethod: DeliveryCompletionMethod.HANDED_TO_CUSTOMER },
+    {
+      customerCodeVerified: false,
+      codeless: { reasonCode, reasonLabel, note, fromStatus: fulfillment.status }
+    });
+    return this.orderDetail(orderId, input.adminUserId);
+  }
+
+  /** The SUPER_ADMIN role, checked by its code rather than by any permission. */
+  private async superAdminActor(adminUserId: string | undefined) {
+    const session = await this.access.session(adminUserId);
+    if (!session.adminUser || !isSuperAdminSession(session)) {
+      throw new ForbiddenException("Only a super admin can complete an order without the customer's code.");
+    }
+    return {
+      actorAdminUserId: session.adminUser.id,
+      actorEmployeeId: session.adminUser.linkedEmployee?.id ?? null
+    };
   }
 
   async claimPicking(orderId: string, input: AdminInput) {
@@ -2060,7 +2268,11 @@ export class OperationsFulfillmentService {
     action: string,
     note: string | undefined,
     fulfillmentData: Prisma.OrderFulfillmentUncheckedUpdateInput,
-    options: { customerCodeVerified: boolean }
+    options: {
+      customerCodeVerified: boolean;
+      /** 无码补登 only. Set by completeWithoutCode after the role check. */
+      codeless?: { reasonCode: string; reasonLabel: string; note: string; fromStatus: FulfillmentStatus };
+    }
   ) {
     await prisma.$transaction(async (tx) => {
       await lockReservationOrder(tx, order.id);
@@ -2069,7 +2281,13 @@ export class OperationsFulfillmentService {
       // A delayed completion retry must not touch a refunded/relisted garment or reset the return window.
       if (current.status === OrderStatus.COMPLETED || current.status === OrderStatus.REFUNDED) return;
       if (current.status !== OrderStatus.PAID && current.status !== OrderStatus.FULFILLING) throw new ConflictException("Order state changed before handover. Refresh before continuing.");
-      this.assertTransition(current, FulfillmentStatus.COMPLETED, { customerCodeVerified: options.customerCodeVerified });
+      if (options.codeless && current.fulfillment?.status !== options.codeless.fromStatus) {
+        throw new ConflictException("This order moved while you were completing it. Refresh and check it again.");
+      }
+      this.assertTransition(current, FulfillmentStatus.COMPLETED, {
+        customerCodeVerified: options.customerCodeVerified,
+        codelessBySuperAdmin: Boolean(options.codeless)
+      });
       const fulfillment = current.fulfillment!;
       const successfulPayments = await tx.payment.findMany({ where: { orderId: current.id, status: PaymentStatus.SUCCESS }, select: { amountKsh: true } });
       if (successfulPayments.reduce((sum, payment) => sum + payment.amountKsh, 0) < current.totalKsh) throw new BadRequestException("Verified successful payment must cover the order before handover.");
@@ -2103,6 +2321,28 @@ export class OperationsFulfillmentService {
         newStatus: FulfillmentStatus.COMPLETED,
         note
       });
+      if (options.codeless) {
+        await tx.auditLog.create({
+          data: {
+            actorType: ActorType.EMPLOYEE,
+            actorId: actor.actorEmployeeId ?? null,
+            actorAdminUserId: actor.actorAdminUserId ?? null,
+            sourceApp: SourceApp.OPERATIONS,
+            module: "ORDERS",
+            entityType: "Order",
+            entityId: current.id,
+            action: CODELESS_COMPLETION_ACTION,
+            beforeJson: { orderStatus: current.status, fulfillmentStatus: fulfillment.status },
+            afterJson: {
+              orderStatus: OrderStatus.COMPLETED,
+              fulfillmentStatus: FulfillmentStatus.COMPLETED,
+              reasonCode: options.codeless.reasonCode,
+              customerCodeVerified: false
+            },
+            reason: `${options.codeless.reasonLabel} · ${options.codeless.note}`
+          }
+        });
+      }
       await this.queueCustomerNotification(tx, current.id, "CUSTOMER_ORDER_COMPLETED");
     });
   }
@@ -2180,7 +2420,7 @@ export class OperationsFulfillmentService {
     return order;
   }
 
-  private assertTransition(order: OrderDetail, to: FulfillmentStatus, extra: { customerCodeVerified?: boolean } = {}) {
+  private assertTransition(order: OrderDetail, to: FulfillmentStatus, extra: { customerCodeVerified?: boolean; codelessBySuperAdmin?: boolean } = {}) {
     const fulfillment = order.fulfillment;
     if (!fulfillment || !canTransitionFulfillment({
       from: fulfillment.status,
@@ -2188,11 +2428,12 @@ export class OperationsFulfillmentService {
       fulfillmentMethod: order.fulfillmentMethod,
       hasDeliveryRider: Boolean(fulfillment.deliveryRiderId),
       nodeType: nodeTypeFor(order),
-      customerCodeVerified: extra.customerCodeVerified
+      customerCodeVerified: extra.customerCodeVerified,
+      codelessBySuperAdmin: extra.codelessBySuperAdmin
     })) {
       // Completion without a verified code is the one failure worth naming, so
       // the rider's screen says what to do instead of "cannot move".
-      if (to === FulfillmentStatus.COMPLETED && !extra.customerCodeVerified && fulfillment) {
+      if (to === FulfillmentStatus.COMPLETED && !extra.customerCodeVerified && !extra.codelessBySuperAdmin && fulfillment) {
         throw new BadRequestException("This order cannot be completed without the customer's code.");
       }
       throw new BadRequestException(`Fulfillment cannot move from ${fulfillment?.status ?? "NONE"} to ${to}.`);
@@ -2652,6 +2893,30 @@ export class OperationsFulfillmentService {
       create: data
     });
   }
+}
+
+/** The role whose holders may complete an order without the customer's code. */
+export const SUPER_ADMIN_ROLE_CODE = "SUPER_ADMIN";
+
+export function isSuperAdminSession(session: { roles: ReadonlyArray<{ code: string }> }): boolean {
+  return session.roles.some((role) => role.code === SUPER_ADMIN_ROLE_CODE);
+}
+
+function requireReassignReason(value: string | undefined): string {
+  const reason = value?.trim() ?? "";
+  if (reason.length < REASSIGN_REASON_MIN_LENGTH) throw new BadRequestException("Say why the work is being moved to someone else.");
+  return reason;
+}
+
+function errorMessage(caught: unknown): string {
+  if (caught instanceof BadRequestException || caught instanceof ForbiddenException || caught instanceof ConflictException || caught instanceof NotFoundException) {
+    const response = caught.getResponse();
+    if (typeof response === "object" && response && "message" in response) {
+      const message = (response as { message: unknown }).message;
+      return Array.isArray(message) ? message.join("; ") : String(message);
+    }
+  }
+  return caught instanceof Error ? caught.message : "Unknown error";
 }
 
 function labelNotPrinted() {

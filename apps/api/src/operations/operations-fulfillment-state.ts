@@ -23,7 +23,51 @@ export type FulfillmentTransitionInput = {
    * cannot complete an order by skipping the verification helper.
    */
   customerCodeVerified?: boolean;
+  /**
+   * 无码补登: a super admin records that the parcel already reached the
+   * customer without the code being read out. It is a separate, named flag so
+   * no ordinary caller can stumble into it, and it only opens the statuses in
+   * CODELESS_COMPLETION_STATUSES. The service checks the role before setting it.
+   */
+  codelessBySuperAdmin?: boolean;
 };
+
+/**
+ * Where a super admin may record a code-less handover from. Everything from a
+ * sealed parcel onwards: staff sometimes hand a packed parcel over at the
+ * warehouse, or a store gives it out before scanning it in. A failed delivery
+ * on its way back is not here — it has to come back to the shelf first.
+ */
+export const CODELESS_COMPLETION_STATUSES: readonly FulfillmentStatus[] = [
+  FulfillmentStatus.PACKED,
+  FulfillmentStatus.IN_TRANSIT_TO_NODE,
+  FulfillmentStatus.ARRIVED_AT_NODE,
+  FulfillmentStatus.READY_FOR_PICKUP,
+  FulfillmentStatus.READY_FOR_DISPATCH,
+  FulfillmentStatus.OUT_FOR_DELIVERY
+];
+
+/** Why the code was not used. OTHER needs the note to say what happened. */
+export const CODELESS_COMPLETION_REASONS = {
+  OFFLINE_HANDOVER_NO_CODE: "已线下交付，顾客无码",
+  PICKED_UP_CODE_LOST: "顾客已取货，码丢失",
+  OTHER: "其他"
+} as const;
+
+export type CodelessCompletionReason = keyof typeof CODELESS_COMPLETION_REASONS;
+
+/** The note has to be a sentence, not "ok". */
+export const CODELESS_COMPLETION_NOTE_MIN_LENGTH = 10;
+
+/** The event both the timeline and the business report look for. */
+export const CODELESS_COMPLETION_ACTION = "CODELESS_COMPLETION";
+
+/** A reassignment has to say why, so the timeline can answer "who moved this and why". */
+export const REASSIGN_REASON_MIN_LENGTH = 2;
+
+export function canCompleteWithoutCode(status: FulfillmentStatus | null | undefined): boolean {
+  return Boolean(status) && CODELESS_COMPLETION_STATUSES.includes(status!);
+}
 
 /**
  * Every tab of the order centre, in the order the screen shows them. The
@@ -123,6 +167,12 @@ export function canTransitionFulfillment(input: FulfillmentTransitionInput): boo
   }
   if (from === FulfillmentStatus.RETURNING_TO_NODE && to === FulfillmentStatus.ARRIVED_AT_NODE) {
     return fulfillmentMethod === FulfillmentMethod.KIKUYU_LOCAL_DELIVERY;
+  }
+
+  // The super-admin back door (无码补登), kept apart from the coded completions
+  // below and limited to sealed parcels that are not on their way back.
+  if (to === FulfillmentStatus.COMPLETED && input.codelessBySuperAdmin) {
+    return canCompleteWithoutCode(from);
   }
 
   // The two completions, and the one rule they share.

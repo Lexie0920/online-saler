@@ -5,6 +5,9 @@ import {
   OperationsFulfillmentService,
   type AdminInput,
   type AfterSaleInput,
+  type BatchReassignInput,
+  type CodelessCompletionInput,
+  type ReassignInput,
   type DeliveryCodeInput,
   type DeliveryCostInput,
   type DeliveryFailureInput,
@@ -65,6 +68,33 @@ export class OperationsFulfillmentController {
   @Post(":orderId/assign-picker")
   async assignPicker(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Body() body: EmployeeInput) {
     return this.orders.assignPicker(orderId, await this.scopedInput(authorization, orderId, body));
+  }
+
+  /** 改派拣货员: moves a task already being picked. Supervisors only; a reason is required. */
+  @Post(":orderId/reassign-picker")
+  async reassignPicker(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Body() body: ReassignInput) {
+    return this.orders.reassignPicker(orderId, await this.scopedInput(authorization, orderId, body));
+  }
+
+  /** 改派打包员: moves a parcel waiting to be packed, even once packing has started. */
+  @Post(":orderId/reassign-packer")
+  async reassignPacker(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Body() body: ReassignInput) {
+    return this.orders.reassignPacker(orderId, await this.scopedInput(authorization, orderId, body));
+  }
+
+  /**
+   * 批量改派: { orderIds, employeeId, reason }. Each order is checked against
+   * the caller's store scope inside the service before it is touched.
+   */
+  @Post("reassign-batch")
+  async reassignBatch(@Headers("authorization") authorization: string | undefined, @Body() body: BatchReassignInput) {
+    return this.orders.reassignBatch({ ...body, adminUserId: await this.access.requireAccessToken(authorization) });
+  }
+
+  /** 无码补登: super admin only, checked by role inside the service. */
+  @Post(":orderId/complete-without-code")
+  async completeWithoutCode(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Body() body: CodelessCompletionInput) {
+    return this.orders.completeWithoutCode(orderId, await this.scopedInput(authorization, orderId, body));
   }
 
   @Post(":orderId/assign-packer")
