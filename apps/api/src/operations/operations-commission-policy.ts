@@ -1,4 +1,4 @@
-import { createCommissionEligibleAt } from "@online-saler/business-rules";
+import { COMMISSION_CONFIRMATION_HOURS, createCommissionEligibleAt } from "@online-saler/business-rules";
 
 type CommissionEligibilityInput = {
   holdReason: string | null;
@@ -37,7 +37,7 @@ export function commissionEligibility(commission: CommissionEligibilityInput, no
     return { eligibleAt, blockingReason: "The original order requires verified successful payment covering its total." };
   }
   if (now.getTime() < eligibleAt.getTime()) {
-    return { eligibleAt, blockingReason: `Commission becomes eligible 24 hours after handover (${eligibleAt.toISOString()}).` };
+    return { eligibleAt, blockingReason: `Commission becomes eligible ${COMMISSION_CONFIRMATION_HOURS} hours (3 days, the return window) after handover (${eligibleAt.toISOString()}).` };
   }
   if (commission.order.customerServiceCases.some((serviceCase) =>
     serviceCase.requiresReturn || serviceCase.requiresRefund || serviceCase.affectsAffiliateCommission ||

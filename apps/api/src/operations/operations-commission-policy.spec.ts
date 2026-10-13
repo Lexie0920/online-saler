@@ -4,7 +4,7 @@ import { resolveDefaultCommissionRate } from "@online-saler/business-rules";
 import { commissionEligibility } from "./operations-commission-policy";
 
 const deliveredAt = new Date("2026-09-01T10:00:00Z");
-const eligibleAt = new Date("2026-09-02T10:00:00Z");
+const eligibleAt = new Date("2026-09-04T10:00:00Z");
 function input() {
   return {
     holdReason: null as string | null,
@@ -22,8 +22,10 @@ function input() {
   };
 }
 
-test("handover is required and 24-hour boundary is exact for both pickup and delivery", () => {
-  assert.match(commissionEligibility(input(), new Date(eligibleAt.getTime() - 1)).blockingReason!, /24 hours/);
+test("handover is required and the 72-hour boundary is exact for both pickup and delivery", () => {
+  assert.match(commissionEligibility(input(), new Date(eligibleAt.getTime() - 1)).blockingReason!, /72 hours/);
+  // 2026-10-14: a commission handed over 25 hours ago is no longer confirmable (was 24h).
+  assert.match(commissionEligibility(input(), new Date(deliveredAt.getTime() + 25 * 60 * 60 * 1000)).blockingReason!, /72 hours/);
   assert.deepEqual(commissionEligibility(input(), eligibleAt), { eligibleAt, blockingReason: null });
   const missing = input();
   missing.order.fulfillment = null;

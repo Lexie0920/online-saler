@@ -2724,8 +2724,8 @@ export const enDictionary: Record<string, string> = {
   "待退顾客": "Owed back",
   "已退": "Refunded",
   "逾期应退但还没在 M-Pesa 执行": "owed after a lapse but not yet paid in M-Pesa",
-  "统一按销售额 25% 计提，完成交付满 24 小时后可确认。":
-    "Accrued at 25% of the sale and confirmable 24 hours after handover.",
+  "统一按销售额 25% 计提，完成交付满 3 天（72 小时，退货期结束）后可确认。":
+    "Accrued at 25% of the sale and confirmable 3 days (72 hours, once the return window closes) after handover.",
   "笔": "orders",
   "可发放": "Payable",
   "已发放": "Paid out",

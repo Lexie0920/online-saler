@@ -451,7 +451,7 @@ PAYABLE -> REVERSED
 
 - Commission is single-level in MVP.
 - Commission is estimated after payment.
-- Commission is not confirmed until 24 hours after delivery and no valid return request exists.
+- Commission is not confirmed until 72 hours after delivery (2026-10-14; was 24 hours) and no valid return request exists.
 - Refunded item revokes or reverses the related commission.
 - Commission batch is paid weekly.
 - Commission payment and commission calculation require separate permissions.

@@ -591,7 +591,7 @@ Unique where available:
 | `commissionRuleId` | FK to CommissionRule. |
 | `amountKsh` | Commission amount. |
 | `status` | Commission state. |
-| `eligibleAt` | Delivery plus 24 hours. |
+| `eligibleAt` | Delivery plus 72 hours (the return window; 24 hours before 2026-10-14). |
 | `confirmedAt` | Nullable. |
 | `paidAt` | Nullable. |
 | `reversalReason` | Nullable. |

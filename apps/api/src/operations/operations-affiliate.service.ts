@@ -469,7 +469,7 @@ export class OperationsAffiliateService {
           action: `COMMISSION_${action}`,
           beforeJson: commissionAuditState(commission),
           afterJson: commissionAuditState(updated),
-          reason: note ?? "Completed handover plus 24 hours; no blocking after-sales case."
+          reason: note ?? "Completed handover plus 72 hours (the return window); no blocking after-sales case."
         }
       });
       return updated;

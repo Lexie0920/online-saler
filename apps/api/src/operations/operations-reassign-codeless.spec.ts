@@ -413,8 +413,8 @@ test("commission is eligible after a code-less completion exactly as after a cod
     }
   };
   const tooEarly = commissionEligibility(commission, new Date(completedAt.getTime() + 60_000));
-  assert.match(String(tooEarly.blockingReason), /24 hours/, "the usual waiting period applies");
-  const later = commissionEligibility(commission, new Date(completedAt.getTime() + 25 * 60 * 60 * 1000));
+  assert.match(String(tooEarly.blockingReason), /72 hours/, "the usual waiting period applies");
+  const later = commissionEligibility(commission, new Date(completedAt.getTime() + 73 * 60 * 60 * 1000));
   assert.equal(later.blockingReason, null, "and then it can be confirmed as usual");
 });
 

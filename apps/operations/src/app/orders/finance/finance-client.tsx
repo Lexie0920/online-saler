@@ -192,7 +192,7 @@ export function FinancePage() {
             <Card>
               <CardHeader>
                 <CardTitle>{t("推广佣金")}</CardTitle>
-                <CardDescription>{t("统一按销售额 25% 计提，完成交付满 24 小时后可确认。")}</CardDescription>
+                <CardDescription>{t("统一按销售额 25% 计提，完成交付满 3 天（72 小时，退货期结束）后可确认。")}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-2 sm:grid-cols-2">
                 <Metric label={t("待确认")} value={formatKsh(summary.commission.pendingKsh)} note={`${summary.commission.pendingCount} ${t("笔")}`} />

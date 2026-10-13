@@ -169,8 +169,21 @@ Until 2026-09-26 returns were accepted only for those five reasons and within
   link and then another's before paying.
 - Attribution expires after 7 days.
 - Commission is estimated after payment.
-- Commission is confirmed 24 hours after delivery if no valid return request exists.
-- Commission is paid weekly.
+- Commission is confirmed 72 hours (3 days) after delivery or pickup if no
+  valid return request exists (owner, 2026-10-14; was 24 hours). This matches
+  the 3-day return window, so commission is never confirmed while the garment
+  can still come back. Commissions already confirmed under the 24-hour rule
+  stay confirmed.
+- Commission is paid weekly (2026-10-14, "做法一"): every Monday finance opens
+  推广中心 → 周结付款 for the previous Monday–Sunday (Nairobi), sends each
+  person their total by hand with M-Pesa Send Money, and records the M-Pesa
+  transaction code against that person. One code marks all of that person's
+  items in the sheet paid at once (commissions move CONFIRMED → PAID; rider fees
+  are linked to the payout). A code can be recorded only once, an item already
+  paid is never listed again, and the paying admin cannot record a payout to
+  themselves. Only SUPER_ADMIN and FINANCE hold `finance.payout`.
+- A commission belongs to the week it was confirmed in; a rider fee belongs to
+  the week its delivery was completed with the customer's code.
 - Refunded items revoke the related commission.
 - A cancelled or written-off order reverses its commission: an unconfirmed one
   is rejected, a confirmed one is frozen with a hold reason so it cannot be
