@@ -1,0 +1,438 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException
+} from "@nestjs/common";
+import {
+  ActorType,
+  CommissionStatus,
+  FulfillmentStatus,
+  PayoutPayeeType,
+  Prisma,
+  SourceApp,
+  prisma
+} from "@online-saler/database";
+import { OperationsAccessService } from "./operations-access.service";
+import { commissionOrderInclude } from "./operations-affiliate.service";
+import { commissionEligibility } from "./operations-commission-policy";
+import {
+  buildPayoutSheet,
+  normalizeMpesaCode,
+  payoutSheetCsv,
+  payoutWeek,
+  selfPaymentMatch,
+  type PayeeIdentity,
+  type Payer,
+  type PayoutRow,
+  type PayoutWeek,
+  type SheetCommission,
+  type SheetRiderFee
+} from "./operations-payout-sheet";
+
+/**
+ * 周结付款 — weekly manual M-Pesa payouts (owner, 2026-10-14, "做法一").
+ *
+ * The sheet lists, per person, what the shop owes for one Monday–Sunday week:
+ * promoters' confirmed commissions and riders' delivery fees. Finance sends
+ * each amount by hand with M-Pesa Send Money and records the transaction code
+ * here. Recording a code marks every item in that person's row paid, in one
+ * database transaction: commissions take the existing CONFIRMED → PAID step,
+ * rider fees are linked to the new Payout row. The same code is never
+ * accepted twice and a paid item is never listed again.
+ *
+ * Nothing here moves money and nothing touches an order, payment, stock or
+ * return state.
+ */
+
+export const FINANCE_PAYOUT = "finance.payout";
+
+type Db = Prisma.TransactionClient;
+
+export type PayoutSheetInput = { adminUserId?: string; week?: string };
+
+export type MarkPayoutPaidInput = {
+  adminUserId?: string;
+  week?: string;
+  payeeKey?: string;
+  mpesaCode?: string;
+  note?: string;
+  /** What the screen showed; refused if the row has changed since. */
+  expectedAmountKsh?: number;
+};
+
+const SELF_PAYMENT_MESSAGE =
+  "You cannot record a payout to yourself. Another finance or super admin account has to record this one.";
+
+const riderSelect = {
+  id: true,
+  type: true,
+  name: true,
+  phone: true,
+  adminUserId: true,
+  employeeId: true,
+  fulfillmentNodeId: true
+} as const;
+
+@Injectable()
+export class OperationsPayoutService {
+  constructor(private readonly access: OperationsAccessService) {}
+
+  /** The sheet for one week, with what was already paid for it and a CSV. */
+  async weeklySheet(input: PayoutSheetInput) {
+    const session = await this.access.requirePermission(input.adminUserId, FINANCE_PAYOUT);
+    const week = parseWeek(input.week);
+    const now = new Date();
+    return prisma.$transaction(async (tx) => {
+      const payer = await loadPayer(tx, session.adminUser!.id);
+      const { rows, identities } = await loadSheet(tx, week, now);
+      const [paid, olderCommissions, olderRiderFees, pending] = await Promise.all([
+        tx.payout.findMany({
+          where: { periodStart: week.start },
+          orderBy: { paidAt: "desc" },
+          select: {
+            id: true,
+            payeeType: true,
+            payeeKey: true,
+            payeeName: true,
+            payeePhone: true,
+            amountKsh: true,
+            itemCount: true,
+            mpesaCode: true,
+            paidAt: true,
+            note: true,
+            paidByAdminUser: { select: { name: true } }
+          }
+        }),
+        tx.commission.aggregate({
+          where: { ...payableCommissionWhere, confirmedAt: { lt: week.start } },
+          _sum: { commissionAmountKsh: true },
+          _count: { _all: true }
+        }),
+        tx.orderFulfillment.aggregate({
+          where: { ...unpaidRiderFeeWhere, completedAt: { lt: week.start } },
+          _sum: { riderFeeKsh: true },
+          _count: { _all: true }
+        }),
+        tx.commission.findMany({
+          where: { status: CommissionStatus.PENDING, holdReason: null },
+          select: {
+            commissionAmountKsh: true,
+            holdReason: true,
+            rateBps: true,
+            orderSubtotalKsh: true,
+            order: { include: commissionOrderInclude }
+          }
+        })
+      ]);
+      const readyToConfirm = pending.filter((commission) => !commissionEligibility(commission, now).blockingReason);
+      const affiliateRows = rows.filter((row) => row.payeeType === "AFFILIATE");
+      const riderRows = rows.filter((row) => row.payeeType === "RIDER");
+      return {
+        week: { start: week.start.toISOString(), end: week.end.toISOString(), firstDay: week.firstDay, lastDay: week.lastDay },
+        totals: {
+          people: rows.length,
+          amountKsh: sumBy(rows, (row) => row.amountKsh),
+          affiliateKsh: sumBy(affiliateRows, (row) => row.amountKsh),
+          affiliatePeople: affiliateRows.length,
+          riderKsh: sumBy(riderRows, (row) => row.amountKsh),
+          riderPeople: riderRows.length,
+          paidKsh: sumBy(paid, (payout) => payout.amountKsh),
+          paidPeople: paid.length
+        },
+        rows: rows.map((row) => {
+          const match = selfPaymentMatch(payer, identities.get(row.payeeKey)!);
+          return { ...row, selfPayment: match ? { by: match, message: SELF_PAYMENT_MESSAGE } : null };
+        }),
+        paid: paid.map((payout) => ({
+          ...payout,
+          paidAt: payout.paidAt.toISOString(),
+          paidByName: payout.paidByAdminUser.name,
+          paidByAdminUser: undefined
+        })),
+        /** Unpaid items that belong to earlier weeks: open that week to pay them. */
+        earlierUnpaid: {
+          commissionKsh: olderCommissions._sum.commissionAmountKsh ?? 0,
+          commissionCount: olderCommissions._count._all,
+          riderFeeKsh: olderRiderFees._sum.riderFeeKsh ?? 0,
+          riderFeeCount: olderRiderFees._count._all
+        },
+        /** PENDING commissions already past the 3-day window, waiting for 确认. */
+        awaitingConfirmation: {
+          count: readyToConfirm.length,
+          amountKsh: sumBy(readyToConfirm, (commission) => commission.commissionAmountKsh)
+        },
+        csv: payoutSheetCsv(rows, week)
+      };
+    });
+  }
+
+  /**
+   * Records one M-Pesa payment to one person and marks every item in their row
+   * paid. Double submissions of the same code for the same person and week
+   * return the payout already recorded instead of failing.
+   */
+  async markPaid(input: MarkPayoutPaidInput) {
+    const session = await this.access.requirePermission(input.adminUserId, FINANCE_PAYOUT);
+    const actor = session.adminUser!;
+    const week = parseWeek(input.week);
+    const payeeKey = input.payeeKey?.trim();
+    if (!payeeKey) throw new BadRequestException("Choose who this payout is for.");
+    const mpesaCode = normalizeMpesaCode(input.mpesaCode);
+    if (!mpesaCode) {
+      throw new BadRequestException("Enter the M-Pesa transaction code from the confirmation SMS: 10 letters and digits, e.g. SJK3ABC12X.");
+    }
+    const note = input.note?.trim().slice(0, 300) || null;
+    const now = new Date();
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const existing = await tx.payout.findUnique({ where: { mpesaCode } });
+        if (existing) {
+          if (existing.payeeKey === payeeKey && existing.periodStart.getTime() === week.start.getTime()) {
+            return { payout: existing, alreadyRecorded: true };
+          }
+          throw new ConflictException(`M-Pesa code ${mpesaCode} was already recorded for another payout (${existing.payeeName}). Check the code.`);
+        }
+
+        // Read the row, lock what it covers, then read it again: an item that
+        // was paid, held or reversed in between drops out before anything is written.
+        const first = (await loadSheet(tx, week, now)).rows.find((row) => row.payeeKey === payeeKey);
+        if (!first) throw new NotFoundException("Nothing is waiting to be paid to this person for this week. It may already be paid; refresh the sheet.");
+        await lockItems(tx, first);
+        const { rows, identities } = await loadSheet(tx, week, now);
+        const row = rows.find((candidate) => candidate.payeeKey === payeeKey);
+        if (!row) throw new NotFoundException("Nothing is waiting to be paid to this person for this week. It may already be paid; refresh the sheet.");
+        if (row.amountKsh !== first.amountKsh || row.count !== first.count
+          || (input.expectedAmountKsh !== undefined && input.expectedAmountKsh !== null && Number(input.expectedAmountKsh) !== row.amountKsh)) {
+          throw new ConflictException(`This person's total has changed and is now KSh ${row.amountKsh} for ${row.count} orders. Refresh the sheet and check before recording.`);
+        }
+
+        const payer = await loadPayer(tx, actor.id);
+        if (selfPaymentMatch(payer, identities.get(row.payeeKey)!)) throw new ForbiddenException(SELF_PAYMENT_MESSAGE);
+
+        const payout = await tx.payout.create({
+          data: {
+            payeeType: row.payeeType === "AFFILIATE" ? PayoutPayeeType.AFFILIATE : PayoutPayeeType.RIDER,
+            payeeKey: row.payeeKey,
+            affiliateId: row.affiliateId,
+            deliveryRiderId: row.deliveryRiderId,
+            payeeName: row.name,
+            payeePhone: row.phone,
+            amountKsh: row.amountKsh,
+            itemCount: row.count,
+            mpesaCode,
+            periodStart: week.start,
+            periodEnd: week.end,
+            paidByAdminUserId: actor.id,
+            paidAt: now,
+            note
+          }
+        });
+
+        const commissionIds = row.items.filter((item) => item.kind === "COMMISSION").map((item) => item.id);
+        const feeIds = row.items.filter((item) => item.kind === "RIDER_FEE").map((item) => item.id);
+        const paymentNote = [`Weekly payout ${week.firstDay}~${week.lastDay}`, `M-Pesa ${mpesaCode}`, note].filter(Boolean).join(" · ");
+
+        if (commissionIds.length) {
+          // The existing CONFIRMED → PAID step, for every commission at once.
+          const changed = await tx.commission.updateMany({
+            where: { id: { in: commissionIds }, ...payableCommissionWhere },
+            data: { status: CommissionStatus.PAID, paidAt: now, payoutId: payout.id, note: paymentNote }
+          });
+          if (changed.count !== commissionIds.length) {
+            throw new ConflictException("A commission in this row changed while recording. Nothing was saved; refresh and try again.");
+          }
+        }
+        if (feeIds.length) {
+          const changed = await tx.orderFulfillment.updateMany({
+            where: { id: { in: feeIds }, ...unpaidRiderFeeWhere },
+            data: { riderFeePayoutId: payout.id }
+          });
+          if (changed.count !== feeIds.length) {
+            throw new ConflictException("A delivery in this row changed while recording. Nothing was saved; refresh and try again.");
+          }
+        }
+
+        const audit = {
+          actorType: ActorType.EMPLOYEE,
+          actorId: actor.linkedEmployeeId,
+          actorAdminUserId: actor.id,
+          sourceApp: SourceApp.OPERATIONS,
+          reason: paymentNote
+        };
+        await tx.auditLog.create({
+          data: {
+            ...audit,
+            module: "FINANCE",
+            entityType: "Payout",
+            entityId: payout.id,
+            action: "PAYOUT_RECORDED",
+            afterJson: {
+              payeeType: payout.payeeType,
+              payeeKey: payout.payeeKey,
+              payeeName: payout.payeeName,
+              payeePhone: payout.payeePhone,
+              amountKsh: payout.amountKsh,
+              itemCount: payout.itemCount,
+              mpesaCode: payout.mpesaCode,
+              periodStart: payout.periodStart.toISOString(),
+              periodEnd: payout.periodEnd.toISOString(),
+              commissionIds,
+              riderFeeFulfillmentIds: feeIds
+            }
+          }
+        });
+        for (const item of row.items) {
+          await tx.auditLog.create({
+            data: item.kind === "COMMISSION"
+              ? {
+                  ...audit,
+                  module: "AFFILIATE",
+                  entityType: "Commission",
+                  entityId: item.id,
+                  action: "COMMISSION_RECORD_PAYMENT",
+                  beforeJson: { status: CommissionStatus.CONFIRMED, paidAt: null, payoutId: null, commissionAmountKsh: item.amountKsh },
+                  afterJson: { status: CommissionStatus.PAID, paidAt: now.toISOString(), payoutId: payout.id, commissionAmountKsh: item.amountKsh }
+                }
+              : {
+                  ...audit,
+                  module: "FINANCE",
+                  entityType: "OrderFulfillment",
+                  entityId: item.id,
+                  action: "RIDER_FEE_PAID",
+                  beforeJson: { riderFeeKsh: item.amountKsh, riderFeePayoutId: null },
+                  afterJson: { riderFeeKsh: item.amountKsh, riderFeePayoutId: payout.id }
+                }
+          });
+        }
+        return { payout, alreadyRecorded: false };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new ConflictException(`M-Pesa code ${mpesaCode} has already been recorded.`);
+      }
+      throw error;
+    }
+  }
+}
+
+/** CONFIRMED, unpaid, not on hold, above zero: the payout export's rule. */
+const payableCommissionWhere = {
+  status: CommissionStatus.CONFIRMED,
+  holdReason: null,
+  paidAt: null,
+  payoutId: null,
+  commissionAmountKsh: { gt: 0 }
+} satisfies Prisma.CommissionWhereInput;
+
+const unpaidRiderFeeWhere = {
+  status: FulfillmentStatus.COMPLETED,
+  riderFeeKsh: { gt: 0 },
+  riderFeePayoutId: null
+} satisfies Prisma.OrderFulfillmentWhereInput;
+
+function parseWeek(day?: string): PayoutWeek {
+  try {
+    return payoutWeek(day);
+  } catch (error) {
+    throw new BadRequestException(error instanceof Error ? error.message : "Invalid week.");
+  }
+}
+
+async function loadSheet(tx: Db, week: PayoutWeek, now: Date): Promise<{ rows: PayoutRow[]; identities: Map<string, PayeeIdentity> }> {
+  const [commissions, fees] = await Promise.all([
+    tx.commission.findMany({
+      where: { ...payableCommissionWhere, confirmedAt: { gte: week.start, lt: week.end } },
+      include: {
+        affiliate: { include: { customer: { select: { phone: true, email: true } } } },
+        order: { include: commissionOrderInclude }
+      },
+      orderBy: { confirmedAt: "asc" }
+    }),
+    tx.orderFulfillment.findMany({
+      where: { ...unpaidRiderFeeWhere, completedAt: { gte: week.start, lt: week.end } },
+      select: {
+        id: true,
+        riderFeeKsh: true,
+        completedAt: true,
+        deliveryRiderId: true,
+        deliveryRiderName: true,
+        deliveryRiderPhone: true,
+        deliveryRider: { select: riderSelect },
+        order: { select: { orderNumber: true } }
+      },
+      orderBy: { completedAt: "asc" }
+    })
+  ]);
+  // Same gate as the payout export: a confirmed commission whose order has
+  // since gained a return or a refund case is not paid until it is resolved.
+  const payable = commissions.filter((commission) => !commissionEligibility(commission, now).blockingReason);
+  const rows = buildPayoutSheet(payable as unknown as SheetCommission[], fees as unknown as SheetRiderFee[]);
+
+  const identities = new Map<string, PayeeIdentity>();
+  for (const commission of payable) {
+    identities.set(`affiliate:${commission.affiliateId}`, {
+      payeeType: "AFFILIATE",
+      displayName: commission.affiliate.displayName,
+      phone: commission.affiliate.phone,
+      email: commission.affiliate.email,
+      customer: commission.affiliate.customer ?? null
+    });
+  }
+  for (const row of rows) {
+    if (row.payeeType !== "RIDER") continue;
+    const sample = fees.find((fee) => row.items.some((item) => item.id === fee.id));
+    identities.set(row.payeeKey, {
+      payeeType: "RIDER",
+      name: row.name,
+      phone: row.phone,
+      adminUserId: sample?.deliveryRider?.adminUserId ?? null,
+      employeeId: sample?.deliveryRider?.employeeId ?? null
+    });
+  }
+  return { rows, identities };
+}
+
+async function lockItems(tx: Db, row: PayoutRow) {
+  const commissionIds = row.items.filter((item) => item.kind === "COMMISSION").map((item) => item.id);
+  const feeIds = row.items.filter((item) => item.kind === "RIDER_FEE").map((item) => item.id);
+  // Commissions are locked through their order, the lock after-sales and
+  // commission transitions already share.
+  if (commissionIds.length) {
+    await tx.$queryRaw`SELECT o."id" FROM "Order" o JOIN "Commission" c ON c."orderId" = o."id" WHERE c."id" IN (${Prisma.join(commissionIds)}) FOR UPDATE OF o`;
+  }
+  if (feeIds.length) {
+    await tx.$queryRaw`SELECT "id" FROM "OrderFulfillment" WHERE "id" IN (${Prisma.join(feeIds)}) FOR UPDATE`;
+  }
+}
+
+async function loadPayer(tx: Db, adminUserId: string): Promise<Payer> {
+  const admin = await tx.adminUser.findUnique({
+    where: { id: adminUserId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      loginAccount: true,
+      linkedEmployeeId: true,
+      linkedEmployee: { select: { name: true, phone: true } }
+    }
+  });
+  if (!admin) throw new ForbiddenException("Admin session is not valid.");
+  return {
+    adminUserId: admin.id,
+    linkedEmployeeId: admin.linkedEmployeeId,
+    name: admin.name,
+    employeeName: admin.linkedEmployee?.name ?? null,
+    // The login account is often a phone number or an email address.
+    phones: [admin.phone, admin.loginAccount, admin.linkedEmployee?.phone ?? null],
+    emails: [admin.email, admin.loginAccount]
+  };
+}
+
+function sumBy<T>(rows: T[], pick: (row: T) => number) {
+  return rows.reduce((total, row) => total + pick(row), 0);
+}

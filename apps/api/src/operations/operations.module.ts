@@ -28,6 +28,8 @@ import { OperationsDepositHoldsController } from "./operations-deposit-holds.con
 import { OperationsDepositHoldsService } from "./operations-deposit-holds.service";
 import { OperationsPaymentReviewController } from "./operations-payment-review.controller";
 import { OperationsPaymentReviewService } from "./operations-payment-review.service";
+import { OperationsPayoutController } from "./operations-payout.controller";
+import { OperationsPayoutService } from "./operations-payout.service";
 import { OperationsRiderController, OperationsRiderRosterController } from "./operations-rider.controller";
 import { OperationsRiderService } from "./operations-rider.service";
 import { OperationsProductBatchController } from "./operations-product-batch.controller";
@@ -56,6 +58,7 @@ import { OperationsWarehouseService } from "./operations-warehouse.service";
     OperationsNotificationsController,
     OperationsDepositHoldsController,
     OperationsPaymentReviewController,
+    OperationsPayoutController,
     OperationsRiderController,
     OperationsRiderRosterController,
     OperationsWarehouseLocationsController,
@@ -76,6 +79,7 @@ import { OperationsWarehouseService } from "./operations-warehouse.service";
     OperationsNodeAdminService,
     OperationsDepositHoldsService,
     OperationsPaymentReviewService,
+    OperationsPayoutService,
     OperationsRiderService,
     OperationsWarehouseService,
     OperationsAffiliateService,

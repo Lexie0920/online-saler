@@ -9,6 +9,7 @@ import {
   prisma
 } from "@online-saler/database";
 import { OperationsAccessService } from "./operations-access.service";
+import { nairobiDay, payoutWeek } from "./operations-payout-sheet";
 import {
   OperationsFulfillmentService,
   type DeliveryCodeInput,
@@ -97,7 +98,8 @@ export class OperationsRiderService {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
-    const [open, completedToday, failedToday] = await Promise.all([
+    const thisWeek = payoutWeek(nairobiDay(new Date()), new Date());
+    const [open, completedToday, failedToday, earnedThisWeek, unsettled, settledThisWeek, lastPayout] = await Promise.all([
       prisma.order.findMany({
         where: { fulfillment: { is: { deliveryRiderId: rider.id, status: { in: RIDER_OPEN_STATUSES } } } },
         include: RIDER_ORDER_INCLUDE,
@@ -108,6 +110,26 @@ export class OperationsRiderService {
       }),
       prisma.orderFulfillment.count({
         where: { deliveryRiderId: rider.id, deliveryFailedAt: { gte: startOfToday } }
+      }),
+      // The rider's own pay only (本周已结算 / 待结算); never an order's money.
+      prisma.orderFulfillment.aggregate({
+        where: { deliveryRiderId: rider.id, status: FulfillmentStatus.COMPLETED, riderFeeKsh: { gt: 0 }, completedAt: { gte: thisWeek.start, lt: thisWeek.end } },
+        _sum: { riderFeeKsh: true },
+        _count: { _all: true }
+      }),
+      prisma.orderFulfillment.aggregate({
+        where: { deliveryRiderId: rider.id, status: FulfillmentStatus.COMPLETED, riderFeeKsh: { gt: 0 }, riderFeePayoutId: null },
+        _sum: { riderFeeKsh: true },
+        _count: { _all: true }
+      }),
+      prisma.payout.aggregate({
+        where: { deliveryRiderId: rider.id, paidAt: { gte: thisWeek.start, lt: thisWeek.end } },
+        _sum: { amountKsh: true }
+      }),
+      prisma.payout.findFirst({
+        where: { deliveryRiderId: rider.id },
+        orderBy: { paidAt: "desc" },
+        select: { amountKsh: true, mpesaCode: true, paidAt: true, itemCount: true }
       })
     ]);
 
@@ -117,6 +139,14 @@ export class OperationsRiderService {
         awaitingDelivery: open.filter((order) => order.fulfillment?.status === FulfillmentStatus.OUT_FOR_DELIVERY).length,
         completedToday,
         failedToday
+      },
+      pay: {
+        earnedThisWeekKsh: earnedThisWeek._sum.riderFeeKsh ?? 0,
+        earnedThisWeekCount: earnedThisWeek._count._all,
+        unsettledKsh: unsettled._sum.riderFeeKsh ?? 0,
+        unsettledCount: unsettled._count._all,
+        settledThisWeekKsh: settledThisWeek._sum.amountKsh ?? 0,
+        lastPayout: lastPayout ? { ...lastPayout, paidAt: lastPayout.paidAt.toISOString() } : null
       },
       deliveries: open.map((order) => this.fulfillment.riderDeliveryView(order))
     };

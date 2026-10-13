@@ -20,7 +20,7 @@ const AFFILIATE_EDIT = "action.affiliate.edit";
 const AFFILIATE_APPROVE = "action.affiliate.approve";
 const AFFILIATE_EXPORT = "action.affiliate.export";
 const DEFAULT_COMMISSION_SETTING_KEY = "affiliate.defaultCommissionRateBps";
-const commissionOrderInclude = {
+export const commissionOrderInclude = {
   fulfillment: { select: { status: true, completedAt: true } },
   payments: { select: { status: true, amountKsh: true } },
   customerServiceCases: { select: { status: true, issueType: true, requiresReturn: true, requiresRefund: true, affectsAffiliateCommission: true } },

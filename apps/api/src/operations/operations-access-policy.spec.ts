@@ -124,3 +124,18 @@ test("the staging seed grants exactly what this policy defines", async () => {
     );
   }
 });
+
+test("finance.payout is held by SUPER_ADMIN and FINANCE only, in the policy, the seed and the role backfill", async () => {
+  const seed = await import("../../../../packages/database/prisma/seed-staging-test-employee.mjs");
+  const holders = (roles: Array<{ code: string; permissions: string[] }>) =>
+    roles.filter((role) => role.permissions.includes("finance.payout")).map((role) => role.code).sort();
+  assert.deepEqual(holders(OPERATIONS_ROLE_BLUEPRINTS), ["FINANCE", "SUPER_ADMIN"]);
+  assert.deepEqual(holders(seed.roles), ["FINANCE", "SUPER_ADMIN"]);
+  // An existing role that already holds something gets its missing defaults on
+  // the next deployment: the payout grant must reach exactly these two roles.
+  const grantedTo = seed.roles
+    .filter((role) => seed.planRoleBackfill(role, { exists: true, held: new Set(["orders.view"]), offered: new Set() }).grant.includes("finance.payout"))
+    .map((role) => role.code)
+    .sort();
+  assert.deepEqual(grantedTo, ["FINANCE", "SUPER_ADMIN"]);
+});
