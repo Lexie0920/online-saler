@@ -37,7 +37,7 @@ test("commission persistence, concurrent payment recording and after-sales guard
     affiliateCode: `COMM-${runId}`, slug: `comm-${runId}`, displayName: "Integration affiliate", commissionRateBps: 3000
   } });
   const service = new OperationsAffiliateService(new OperationsAccessService());
-  async function fixture(hoursSinceHandover = 48, status: "PENDING" | "CONFIRMED" = "PENDING") {
+  async function fixture(hoursSinceHandover = 96, status: "PENDING" | "CONFIRMED" = "PENDING") {
     const order = await prisma.order.create({ data: {
       orderNumber: `COMM-${randomUUID()}`, customerId: customer.id, affiliateId: affiliate.id,
       status: "COMPLETED", fulfillmentMethod: "PICKUP", itemSubtotalKsh: 1000, totalKsh: 1000,
@@ -48,10 +48,10 @@ test("commission persistence, concurrent payment recording and after-sales guard
     return { order, commission: order.commission! };
   }
 
-  await t.test("permission and 24-hour checks leave the persistent commission pending", async () => {
-    const { commission } = await fixture(23);
+  await t.test("permission and 72-hour checks leave the persistent commission pending", async () => {
+    const { commission } = await fixture(71);
     await assert.rejects(service.confirmCommission(commission.id, { adminUserId: unauthorized.id }), /permission/);
-    await assert.rejects(service.confirmCommission(commission.id, { adminUserId: admin.id }), /24 hours/);
+    await assert.rejects(service.confirmCommission(commission.id, { adminUserId: admin.id }), /72 hours/);
     assert.equal((await prisma.commission.findUniqueOrThrow({ where: { id: commission.id } })).status, "PENDING");
     assert.equal(await prisma.auditLog.count({ where: { entityType: "Commission", entityId: commission.id } }), 0);
   });
@@ -70,7 +70,7 @@ test("commission persistence, concurrent payment recording and after-sales guard
   });
 
   await t.test("simultaneous payment recording writes one payment status and one audit", { skip: nativeConcurrencyOnly }, async () => {
-    const { commission } = await fixture(48, "CONFIRMED");
+    const { commission } = await fixture(96, "CONFIRMED");
     const results = await Promise.allSettled([
       service.markCommissionPaid(commission.id, { adminUserId: admin.id, note: "TEST-RECEIPT-A" }),
       service.markCommissionPaid(commission.id, { adminUserId: admin.id, note: "TEST-RECEIPT-B" })
@@ -86,7 +86,7 @@ test("commission persistence, concurrent payment recording and after-sales guard
   });
 
   await t.test("a return committed under the order lock blocks payment recording", { skip: nativeConcurrencyOnly }, async () => {
-    const { order, commission } = await fixture(48, "CONFIRMED");
+    const { order, commission } = await fixture(96, "CONFIRMED");
     let releaseWriter!: () => void;
     let writerLocked!: () => void;
     const ready = new Promise<void>((resolve) => { writerLocked = resolve; });
