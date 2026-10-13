@@ -19,7 +19,7 @@ function harness(t: TestContext, status: Commission["status"] = "PENDING") {
     status: "COMPLETED",
     totalKsh: 1000,
     payments: [{ status: "SUCCESS", amountKsh: 1000 }],
-    fulfillment: { status: "COMPLETED", completedAt: new Date(now.getTime() - 48 * 60 * 60 * 1000) },
+    fulfillment: { status: "COMPLETED", completedAt: new Date(now.getTime() - 96 * 60 * 60 * 1000) },
     customerServiceCases: [], afterSaleReturns: [] as Array<{ status: string }>
   };
   const events: string[] = [];
@@ -67,7 +67,7 @@ test("confirmation locks and re-reads the order, preserves rate/amount and audit
   assert.equal(result.rateBps, 1000);
   assert.equal(result.commissionAmountKsh, 100);
   assert.equal(result.note, "Original note");
-  assert.equal(result.eligibleAt?.getTime(), h.order.fulfillment.completedAt.getTime() + 24 * 60 * 60 * 1000);
+  assert.equal(result.eligibleAt?.getTime(), h.order.fulfillment.completedAt.getTime() + 72 * 60 * 60 * 1000);
   assert.equal(h.audits[0]?.actorAdminUserId, "admin-1");
   assert.equal(h.audits[0]?.actorId, null);
   assert.equal(h.audits[0]?.action, "COMMISSION_CONFIRM");
