@@ -237,6 +237,7 @@ model AdminUser {
   recordedRefunds        RefundRecord[]        @relation("RefundRecordedBy")
   requestedRefunds       RefundRequest[]       @relation("RefundRequestedBy")
   reviewedRefunds        RefundRequest[]       @relation("RefundReviewedBy")
+  recordedPayouts        Payout[]              @relation("PayoutPaidBy")
   lastLoginAt            DateTime?
   lockedAt               DateTime?
   disabledAt             DateTime?
@@ -863,6 +864,12 @@ enum CommissionStatus {
   PAID
 }
 
+/// Who a weekly payout went to: a promoter's commission or a rider's delivery pay.
+enum PayoutPayeeType {
+  AFFILIATE
+  RIDER
+}
+
 enum CustomerServiceCaseStatus {
   OPEN
   IN_PROGRESS
@@ -1154,6 +1161,9 @@ model OrderFulfillment {
   /// parcel is back at the store, so the next hand-off has to choose again.
   riderFeeKsh                 Int?
   riderFeeSetByEmployeeId     String?
+  /// The weekly payout that paid this order's rider fee; null while unpaid.
+  riderFeePayoutId            String?
+  riderFeePayout              Payout?                     @relation("FulfillmentRiderFeePayout", fields: [riderFeePayoutId], references: [id], onDelete: Restrict)
   fulfillmentNodeId           String?
   packageCode                 String?                     @unique
   /// When this parcel's routing label (the one with the QR code) was last sent
@@ -1249,6 +1259,8 @@ model OrderFulfillment {
   @@index([deliveryRiderId])
   @@index([fulfillmentNodeId, status, updatedAt])
   @@index([currentHolderType, status])
+  @@index([status, completedAt])
+  @@index([riderFeePayoutId])
 }
 
 model FulfillmentItem {
@@ -1295,6 +1307,7 @@ model DeliveryRider {
   assignments       DeliveryAssignment[]
   events            FulfillmentEvent[]
   codeAttempts      CustomerCodeAttempt[]
+  payouts           Payout[]
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 
@@ -1461,6 +1474,7 @@ model Affiliate {
   statusPacks       StatusPack[]
   tiktokVideos      TikTokVideo[]
   runThroughVideos  RunThroughVideo[]
+  payouts           Payout[]
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
 
@@ -1721,6 +1735,10 @@ model Commission {
   paidAt              DateTime?
   holdReason          String?
   note                String?
+  /// The weekly M-Pesa payout that paid this commission. Null for commissions
+  /// marked paid one by one before weekly payouts existed (2026-10-14).
+  payoutId            String?
+  payout              Payout?                @relation(fields: [payoutId], references: [id], onDelete: Restrict)
   affiliate           Affiliate              @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
   order               Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   attribution         AffiliateAttribution?  @relation(fields: [attributionId], references: [id], onDelete: SetNull)
@@ -1729,6 +1747,43 @@ model Commission {
 
   @@index([affiliateId, status, createdAt])
   @@index([status, eligibleAt])
+  @@index([payoutId])
+}
+
+/// One hand-sent M-Pesa payment (Send Money) to one person for one week, with
+/// the transaction code M-Pesa returned. The system never moves the money; it
+/// prepares the sheet and records what finance already sent. Every commission
+/// and rider fee it covered links back here, so nothing is paid twice.
+model Payout {
+  id                   String             @id @default(uuid())
+  payeeType            PayoutPayeeType
+  /// The sheet's grouping key: "affiliate:<id>", "rider:<id>", or for a Bolt /
+  /// walk-in rider with no roster entry "external:<phone>|<name>".
+  payeeKey             String
+  affiliateId          String?
+  deliveryRiderId      String?
+  payeeName            String
+  payeePhone           String?
+  amountKsh            Int
+  itemCount            Int
+  /// M-Pesa transaction code, uppercase. A code can be recorded once only.
+  mpesaCode            String             @unique
+  periodStart          DateTime
+  periodEnd            DateTime
+  paidByAdminUserId    String
+  paidAt               DateTime           @default(now())
+  note                 String?
+  affiliate            Affiliate?         @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  deliveryRider        DeliveryRider?     @relation(fields: [deliveryRiderId], references: [id], onDelete: Restrict)
+  paidByAdminUser      AdminUser          @relation("PayoutPaidBy", fields: [paidByAdminUserId], references: [id], onDelete: Restrict)
+  commissions          Commission[]
+  riderFeeFulfillments OrderFulfillment[] @relation("FulfillmentRiderFeePayout")
+  createdAt            DateTime           @default(now())
+
+  @@index([payeeType, paidAt])
+  @@index([affiliateId, paidAt])
+  @@index([deliveryRiderId, paidAt])
+  @@index([payeeKey, periodStart])
 }
 
 model CustomerServiceCase {
