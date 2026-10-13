@@ -2433,8 +2433,8 @@ export const enDictionary: Record<string, string> = {
   "④ 打面单发车": "4. Label & send",
   "先打一张拣货单，按货架位走一遍。领取拣货后这些单进入下一步。":
     "Print a picking list and walk the racks once. Claiming picking moves these orders to the next step.",
-  "拿回来的每一件都要扫码核对。全部核对完，订单自动进入待打包。":
-    "Every item you bring back is scanned against its barcode. When all of them are verified the order moves to packing by itself.",
+  "拿回来的每一件都要扫码核对。全部核对完，订单自动进入待打包。原拣货员不在了？勾选这些单，按底部「改派给…」一次改派给别人，已扫的件保留。":
+    "Every item you bring back is scanned against its barcode. When all of them are verified the order moves to packing by itself. Picker no longer here? Tick these orders and press “Reassign … to” at the bottom to move them in one go; items already scanned are kept.",
   "开始打包 → 完成打包。填包装方式和包裹数量，完成时生成包裹号。":
     "Start packing, then finish it. Give the packaging and the parcel count; finishing creates the package code.",
   "送货上门的单先指定中转点（门店）。然后勾上整组打面单，第 1 张贴箱子、其余放进去。面单印出后才能发往门店。":
@@ -3051,4 +3051,40 @@ export const enDictionary: Record<string, string> = {
   "勾选和批量操作只作用于本页；翻页后请重新勾选。": "Ticks and batch actions apply to this page only. Tick again after changing page.",
   "查看大图": "View large photo",
   "无条码": "No barcode",
+
+  // ——— 改派拣货员 / 打包员, 无码补登 (2026-10-13) ———
+  "改派拣货员": "Reassign picker",
+  "改派打包员": "Reassign packer",
+  "补登已交付（无码）": "Record as delivered (no code)",
+  "现在是：{name}": "Currently: {name}",
+  "已经扫过的 {done}/{total} 件保留，不用重扫。新拣货员马上可以继续扫剩下的。":
+    "The {done}/{total} items already scanned are kept and need no rescan. The new picker can scan the rest straight away.",
+  "打包开始时间保留。新打包员可以直接完成打包。": "The packing start time is kept. The new packer can finish packing directly.",
+  "改派原因（必填）": "Reason for reassigning (required)",
+  "例如：原员工已离职 / 测试账号停用": "e.g. the previous employee has left / test account disabled",
+  "这会绕过顾客的取货码 / 配送码": "This bypasses the customer's pickup / delivery code",
+  "只在包裹确实已经交到顾客手里、但没有核对取货码或配送码时使用。订单会直接变成已完成，库存记为已交付，佣金照常确认。时间线和经营报表会记下是谁、什么时候、为什么补登。":
+    "Use this only when the parcel really is with the customer but no pickup or delivery code was checked. The order becomes completed, the stock is recorded as delivered, and commission is confirmed as usual. The timeline and the business report record who did it, when and why.",
+  "原因（必填）": "Reason (required)",
+  "已线下交付，顾客无码": "Handed over offline, customer has no code",
+  "顾客已取货，码丢失": "Customer collected, code lost",
+  "情况说明（必填，至少 {min} 个字）": "What happened (required, at least {min} characters)",
+  "例如：顾客当面付款，我亲手交给了她": "e.g. the customer paid in person and I handed it to her myself",
+  "我确认包裹已经交给顾客，这次没有核对取货码 / 配送码。":
+    "I confirm the parcel was handed to the customer and no pickup / delivery code was checked this time.",
+  "确认无码补登": "Confirm completion without code",
+  "改派给哪位拣货员": "New picker",
+  "改派给哪位打包员": "New packer",
+  "无码补登": "Completed without code",
+  "这单没有核对取货码 / 配送码，由超级管理员补登为已交付。":
+    "No pickup / delivery code was checked for this order. A super admin recorded it as delivered.",
+  "改派给… {count} 单": "Reassign {count} orders to…",
+  "改派给 {name}：{done} 单成功，{failed} 单没成功 —— {detail}": "Reassign to {name}: {done} done, {failed} not done — {detail}",
+  "已改派给 {name}：{done} 单。": "Reassigned {done} orders to {name}.",
+  "批量改派 {count} 单": "Reassign {count} orders",
+  "拣货中的单改派拣货员，待打包的单改派打包员。已经扫过的件保留，不用重扫。每单都会写入状态时间线。":
+    "Orders being picked get a new picker; orders waiting to be packed get a new packer. Items already scanned are kept and need no rescan. Every order gets an entry in its timeline.",
+  "现在在谁名下：{holders}": "Currently with: {holders}",
+  "改派给": "Reassign to",
+  "确认改派 {count} 单": "Reassign {count} orders",
 };

@@ -204,7 +204,28 @@ type Filters = {
 };
 
 type Scope = "workbench" | "all" | "after-sales" | "exceptions";
-type DialogKind = "assign-picker" | "assign-packer" | "scan" | "start-packing" | "complete-packing" | "assign-rider" | "confirm-pickup" | "complete-delivery" | "exception" | "assign-after-sale" | "cancel" | "assign-node" | "write-off" | "refund" | "resolve-exception";
+type DialogKind = "assign-picker" | "assign-packer" | "reassign-picker" | "reassign-packer" | "complete-without-code" | "scan" | "start-packing" | "complete-packing" | "assign-rider" | "confirm-pickup" | "complete-delivery" | "exception" | "assign-after-sale" | "cancel" | "assign-node" | "write-off" | "refund" | "resolve-exception";
+
+/**
+ * 无码补登 is for the SUPER_ADMIN role only, checked by the role's code — not by
+ * a permission, which could be handed to a store. The API checks the same way;
+ * hiding the button here is for tidiness, not for safety.
+ */
+function isSuperAdmin(session: OperationsSession | null): boolean {
+  return Boolean(session?.roles?.some((role) => role.code === "SUPER_ADMIN"));
+}
+
+/** Where 无码补登 is offered. Must match CODELESS_COMPLETION_STATUSES in the API. */
+const CODELESS_COMPLETION_STATUSES = ["PACKED", "IN_TRANSIT_TO_NODE", "ARRIVED_AT_NODE", "READY_FOR_PICKUP", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY"];
+const CODELESS_REASON_OPTIONS = [
+  ["OFFLINE_HANDOVER_NO_CODE", "已线下交付，顾客无码"],
+  ["PICKED_UP_CODE_LOST", "顾客已取货，码丢失"],
+  ["OTHER", "其他"]
+] as const;
+const CODELESS_NOTE_MIN_LENGTH = 10;
+const CODELESS_COMPLETION_ACTION = "CODELESS_COMPLETION";
+/** Orders a batch 改派 can move: still being picked, or waiting to be packed. */
+const REASSIGNABLE_STATUSES = ["PAID", "PICKING", "READY_TO_PACK"];
 type DialogState = { kind: DialogKind; order: OrderRow; item?: OrderRow["items"][number] } | null;
 type RequestOptions = RequestInit & { query?: Record<string, string | undefined> };
 
@@ -510,7 +531,7 @@ export function OrderCenterPage({ scope }: { scope: Scope }) {
  * orders it will touch — because a mixed selection is normal and "领取拣货 12 单"
  * out of 20 ticked is the honest description of what the button does.
  */
-function BatchBar({ orders, pageOrderCount, session, busy, onClear, onSelectPage, onPickingSheet, onLabels, onBatch }: {
+function BatchBar({ orders, pageOrderCount, session, busy, onClear, onSelectPage, onPickingSheet, onLabels, onBatch, onReassign }: {
   orders: OrderRow[];
   /** How many selectable orders are on this page: the selection never reaches past it. */
   pageOrderCount: number;
@@ -521,8 +542,10 @@ function BatchBar({ orders, pageOrderCount, session, busy, onClear, onSelectPage
   onPickingSheet: () => void;
   onLabels: (orders: OrderRow[]) => void;
   onBatch: (orders: OrderRow[], action: string, label: string) => Promise<void>;
+  onReassign: (orders: OrderRow[]) => void;
 }) {
   if (!orders.length) return null;
+  const reassignable = orders.filter((order) => REASSIGNABLE_STATUSES.includes(order.fulfillment?.status ?? ""));
   const claimable = orders.filter((order) => order.fulfillment?.status === "PAID");
   // A parcel with no destination has no sticker, and one without a printed
   // sticker cannot be checked in at the store — both are left out and counted.
@@ -551,6 +574,11 @@ function BatchBar({ orders, pageOrderCount, session, busy, onClear, onSelectPage
               <ClipboardCheckIcon data-icon="inline-start" />{t("领取拣货 {count} 单", { count: claimable.length })}
             </Button>
           ) : null}
+          {reassignable.length && hasPermission(session, "orders.assign-picker") ? (
+            <Button variant="outline" disabled={busy} onClick={() => onReassign(reassignable)}>
+              <UserRoundCheckIcon data-icon="inline-start" />{t("改派给… {count} 单", { count: reassignable.length })}
+            </Button>
+          ) : null}
           {sendable.length && hasPermission(session, "orders.assign-node") ? (
             <Button disabled={busy} onClick={() => void onBatch(sendable, "send-to-node", t("批量发往门店"))}>
               <TruckIcon data-icon="inline-start" />{t("发往门店 {count} 单", { count: sendable.length })}
@@ -571,7 +599,7 @@ function BatchBar({ orders, pageOrderCount, session, busy, onClear, onSelectPage
 /** The four things a morning consists of, in the order they happen. */
 const DISPATCH_STEPS = [
   { key: "pick", label: "① 打单拣货", statuses: ["PAID"], hint: "先打一张拣货单，按货架位走一遍。领取拣货后这些单进入下一步。" },
-  { key: "scan", label: "② 逐件核对", statuses: ["PICKING"], hint: "拿回来的每一件都要扫码核对。全部核对完，订单自动进入待打包。" },
+  { key: "scan", label: "② 逐件核对", statuses: ["PICKING"], hint: "拿回来的每一件都要扫码核对。全部核对完，订单自动进入待打包。原拣货员不在了？勾选这些单，按底部「改派给…」一次改派给别人，已扫的件保留。" },
   { key: "pack", label: "③ 打包", statuses: ["READY_TO_PACK"], hint: "开始打包 → 完成打包。填包装方式和包裹数量，完成时生成包裹号。" },
   { key: "dispatch", label: "④ 打面单发车", statuses: ["PACKED"], hint: "送货上门的单先指定中转点（门店）。然后勾上整组打面单，第 1 张贴箱子、其余放进去。面单印出后才能发往门店。" },
   // Not a job for the warehouse any more, but the question it is asked most:
@@ -606,6 +634,7 @@ export function DailyDispatchPage() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [labelOrders, setLabelOrders] = useState<OrderRow[] | null>(null);
   const [pickingSheet, setPickingSheet] = useState<OrderRow[] | null>(null);
+  const [reassignOrders, setReassignOrders] = useState<OrderRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -879,6 +908,19 @@ export function DailyDispatchPage() {
         onPickingSheet={() => setPickingSheet(selectedOrders)}
         onLabels={(targets) => setLabelOrders(targets)}
         onBatch={batchAction}
+        onReassign={setReassignOrders}
+      />
+      <BatchReassignDialog
+        orders={reassignOrders}
+        employees={employees}
+        accessToken={accessToken}
+        onClose={() => setReassignOrders(null)}
+        onDone={async (message, failed) => {
+          setReassignOrders(null);
+          setSelected(new Set());
+          if (failed) { setError(message); setNotice(""); } else { setNotice(message); setError(""); }
+          await load();
+        }}
       />
 
       <OrderActionDialog
@@ -899,6 +941,99 @@ export function DailyDispatchPage() {
         <PickingSheetDialog lines={pickingLines} onClose={() => setPickingSheet(null)} />
       ) : null}
     </div>
+  );
+}
+
+type BatchReassignResult = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{ orderId: string; orderNumber: string | null; ok: boolean; role?: "picker" | "packer"; error?: string }>;
+};
+
+/**
+ * 批量改派: every ticked order still being picked or waiting to be packed goes
+ * to one person in one request — how sixteen orders left in a leaver's name are
+ * moved without opening sixteen dialogs. The API decides per order whether the
+ * person becomes its picker or its packer, and names every order it could not move.
+ */
+function BatchReassignDialog({ orders, employees, accessToken, onClose, onDone }: {
+  orders: OrderRow[] | null;
+  employees: Employee[];
+  accessToken: string;
+  onClose: () => void;
+  onDone: (message: string, failed: boolean) => Promise<void>;
+}) {
+  const [employeeId, setEmployeeId] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!orders) return;
+    setEmployeeId(""); setReason(""); setError("");
+  }, [orders]);
+
+  const holders = useMemo(() => {
+    const names = new Map<string, number>();
+    for (const order of orders ?? []) {
+      const fulfillment = order.fulfillment;
+      const name = fulfillment?.status === "READY_TO_PACK"
+        ? fulfillment.assignedPacker?.name ?? fulfillment.packingStartedBy?.name
+        : fulfillment?.assignedPicker?.name;
+      const key = name ?? t("未分配");
+      names.set(key, (names.get(key) ?? 0) + 1);
+    }
+    return [...names.entries()].map(([name, count]) => `${name} × ${count}`).join(", ");
+  }, [orders]);
+
+  async function submit() {
+    if (!orders?.length) return;
+    setBusy(true); setError("");
+    try {
+      const result = await request<BatchReassignResult>("/operations/orders/reassign-batch", {
+        method: "POST",
+        headers: authorizationHeaders(accessToken),
+        body: JSON.stringify({ orderIds: orders.map((order) => order.id), employeeId, reason })
+      });
+      const name = employees.find((employee) => employee.id === employeeId)?.name ?? "";
+      const failures = result.results.filter((row) => !row.ok);
+      await onDone(
+        failures.length
+          ? t("改派给 {name}：{done} 单成功，{failed} 单没成功 —— {detail}", {
+              name,
+              done: result.succeeded,
+              failed: result.failed,
+              detail: failures.map((row) => `${row.orderNumber ?? row.orderId}（${row.error ?? t("未知错误")}）`).join("；")
+            })
+          : t("已改派给 {name}：{done} 单。", { name, done: result.succeeded }),
+        failures.length > 0
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("订单操作失败。"));
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={Boolean(orders)} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{t("批量改派 {count} 单", { count: orders?.length ?? 0 })}</DialogTitle>
+          <DialogDescription>{t("拣货中的单改派拣货员，待打包的单改派打包员。已经扫过的件保留，不用重扫。每单都会写入状态时间线。")}</DialogDescription>
+        </DialogHeader>
+        <FieldGroup>
+          <p className="text-muted-foreground text-sm">{t("现在在谁名下：{holders}", { holders })}</p>
+          <EmployeeFilter label={t("改派给")} value={employeeId} employees={employees} onChange={setEmployeeId} />
+          <Field><FieldLabel>{t("改派原因（必填）")}</FieldLabel><Textarea value={reason} placeholder={t("例如：原员工已离职 / 测试账号停用")} onChange={(event) => setReason(event.target.value)} /></Field>
+        </FieldGroup>
+        {error ? <Alert variant="destructive"><AlertTriangleIcon /><AlertTitle>{error}</AlertTitle></Alert> : null}
+        <DialogFooter showCloseButton>
+          <Button disabled={busy || !employeeId || reason.trim().length < 2} onClick={() => void submit()}>
+            {busy ? t("正在保存...") : t("确认改派 {count} 单", { count: orders?.length ?? 0 })}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1164,6 +1299,7 @@ function OrderCard(props: {
                 <StatusBadge status={payment?.status ?? "NO_PAYMENT"} />
                 {fulfillment?.packageCode ? <Badge variant="outline" className="font-mono">{fulfillment.packageCode}</Badge> : null}
                 {fulfillment?.packageLabelPrintedAt ? <Badge variant="secondary"><PrinterIcon />{t("面单已打印")}</Badge> : null}
+                {fulfillment?.events?.some((event) => event.action === CODELESS_COMPLETION_ACTION) ? <Badge variant="destructive"><AlertTriangleIcon />{t("无码补登")}</Badge> : null}
               </div>
               <CardDescription>
                 {formatDate(order.createdAt)} · {order.customer.displayName ?? order.customer.email} · {payment?.phone ?? order.customer.phone ?? t("未留手机号")}
@@ -1388,6 +1524,16 @@ function orderActions({ order, session, onDialog, onDirect, onLabel }: {
   if (status === "PAID" && hasPermission(session, "orders.assign-picker")) {
     actions.push({ key: "assign", label: t("分配给其他拣货员"), icon: <UserRoundCheckIcon data-icon="inline-start" />, run: () => onDialog({ kind: "assign-picker", order }), variant: "outline" });
   }
+  // Someone already started: moving it is a reassignment and needs a reason.
+  if (status === "PICKING" && hasPermission(session, "orders.assign-picker")) {
+    actions.push({ key: "reassign-picker", label: t("改派拣货员"), icon: <UserRoundCheckIcon data-icon="inline-start" />, run: () => onDialog({ kind: "reassign-picker", order }), variant: "outline" });
+  }
+  if (status === "READY_TO_PACK" && order.fulfillment?.packingStartedAt && hasPermission(session, "orders.assign-packer")) {
+    actions.push({ key: "reassign-packer", label: t("改派打包员"), icon: <UserRoundCheckIcon data-icon="inline-start" />, run: () => onDialog({ kind: "reassign-packer", order }), variant: "outline" });
+  }
+  if (status && CODELESS_COMPLETION_STATUSES.includes(status) && ["PAID", "FULFILLING"].includes(order.status) && isSuperAdmin(session)) {
+    actions.push({ key: "complete-without-code", label: t("补登已交付（无码）"), icon: <AlertTriangleIcon data-icon="inline-start" />, run: () => onDialog({ kind: "complete-without-code", order }), variant: "destructive" });
+  }
   // Printable as soon as packing assigns a package code, and reprintable at any
   // later step: a sticker that falls off in a van should not need the order
   // rewound to replace it.
@@ -1490,13 +1636,18 @@ function OrderActionDialog(props: {
   const [requiresRefund, setRequiresRefund] = useState("false");
   const [affectsAffiliateCommission, setAffectsAffiliateCommission] = useState("false");
   const [note, setNote] = useState("");
+  const [reassignReason, setReassignReason] = useState("");
+  const [codelessReason, setCodelessReason] = useState("");
+  const [codelessConfirmed, setCodelessConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiRequestError | null>(null);
 
   useEffect(() => {
     if (!state) return;
     const linkedEmployeeId = session?.adminUser?.linkedEmployee?.id ?? "";
-    setEmployeeId(linkedEmployeeId);
+    // A reassignment is to somebody else, so it starts with nobody chosen.
+    setEmployeeId(state.kind === "reassign-picker" || state.kind === "reassign-packer" ? "" : linkedEmployeeId);
+    setReassignReason(""); setCodelessReason(""); setCodelessConfirmed(false);
     setBarcode(""); setPackagingMethod("BAG"); setPackageCount("1"); setRiderType("INTERNAL");
     setName(""); setPhone(""); setCompany(""); setVehicle(""); setEstimatedDeliveryAt(""); setRiderFeeKsh(null);
     // Never prefilled: the whole point is that the customer supplies it.
@@ -1534,6 +1685,9 @@ function OrderActionDialog(props: {
     let body: Record<string, unknown> = { note };
     if (state.kind === "assign-picker") { path = "assign-picker"; body.employeeId = employeeId; }
     if (state.kind === "assign-packer") { path = "assign-packer"; body.employeeId = employeeId; }
+    if (state.kind === "reassign-picker") { path = "reassign-picker"; body = { employeeId, reason: reassignReason }; }
+    if (state.kind === "reassign-packer") { path = "reassign-packer"; body = { employeeId, reason: reassignReason }; }
+    if (state.kind === "complete-without-code") { path = "complete-without-code"; body = { reasonCode: codelessReason, note }; }
     if (state.kind === "scan") { path = `items/${state.item!.id}/scan`; body.barcode = barcode; }
     if (state.kind === "start-packing") { path = "start-packing"; body.employeeId = employeeId; }
     if (state.kind === "complete-packing") { path = "complete-packing"; body = { ...body, employeeId, packagingMethod, packageCount: Number(packageCount) }; }
@@ -1590,8 +1744,39 @@ function OrderActionDialog(props: {
         </DialogHeader>
         {state ? (
           <FieldGroup>
-            {["assign-picker", "assign-packer", "start-packing", "complete-packing", "assign-after-sale"].includes(state.kind) || (state.kind === "assign-rider" && riderType === "INTERNAL") ? (
+            {state.kind === "reassign-picker" || state.kind === "reassign-packer" ? (
+              <Alert>
+                <UserRoundCheckIcon />
+                <AlertTitle>
+                  {t("现在是：{name}", {
+                    name: (state.kind === "reassign-picker" ? state.order.fulfillment?.assignedPicker?.name : state.order.fulfillment?.assignedPacker?.name ?? state.order.fulfillment?.packingStartedBy?.name) ?? t("未分配")
+                  })}
+                </AlertTitle>
+                <AlertDescription>
+                  {state.kind === "reassign-picker"
+                    ? t("已经扫过的 {done}/{total} 件保留，不用重扫。新拣货员马上可以继续扫剩下的。", {
+                        done: state.order.fulfillment?.items.filter((item) => item.status === "VERIFIED").length ?? 0,
+                        total: state.order.fulfillment?.items.length ?? 0
+                      })
+                    : t("打包开始时间保留。新打包员可以直接完成打包。")}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {["assign-picker", "assign-packer", "reassign-picker", "reassign-packer", "start-packing", "complete-packing", "assign-after-sale"].includes(state.kind) || (state.kind === "assign-rider" && riderType === "INTERNAL") ? (
               <EmployeeFilter label={employeeLabel(state.kind)} value={employeeId} employees={selectableEmployees} onChange={setEmployeeId} />
+            ) : null}
+            {state.kind === "reassign-picker" || state.kind === "reassign-packer" ? (
+              <Field><FieldLabel>{t("改派原因（必填）")}</FieldLabel><Textarea value={reassignReason} placeholder={t("例如：原员工已离职 / 测试账号停用")} onChange={(event) => setReassignReason(event.target.value)} /></Field>
+            ) : null}
+            {state.kind === "complete-without-code" ? (
+              <>
+                <Alert variant="destructive">
+                  <AlertTriangleIcon />
+                  <AlertTitle>{t("这会绕过顾客的取货码 / 配送码")}</AlertTitle>
+                  <AlertDescription>{t("只在包裹确实已经交到顾客手里、但没有核对取货码或配送码时使用。订单会直接变成已完成，库存记为已交付，佣金照常确认。时间线和经营报表会记下是谁、什么时候、为什么补登。")}</AlertDescription>
+                </Alert>
+                <SelectFilter label={t("原因（必填）")} value={codelessReason} onChange={setCodelessReason} options={CODELESS_REASON_OPTIONS.map(([value, label]) => [value, t(label)] as [string, string])} />
+              </>
             ) : null}
             {state.kind === "scan" ? (
               <>
@@ -1676,14 +1861,34 @@ function OrderActionDialog(props: {
             {state.kind === "assign-after-sale" && !managedAfterSale ? <><TextFilter label={t("售后原因")} value={afterSaleReason} onChange={setAfterSaleReason} /><TextFilter label={t("顾客要求")} value={customerRequest} onChange={setCustomerRequest} /><SelectFilter label={t("当前售后状态")} value={afterSaleStatus} onChange={setAfterSaleStatus} options={[["OPEN", t("待处理")], ["IN_PROGRESS", t("处理中")], ["RESOLVED", t("已解决")], ["CLOSED", t("已关闭")]]} /><SelectFilter label={t("是否需要退货")} value={requiresReturn} onChange={setRequiresReturn} options={[["false", t("不需要")], ["true", t("需要")]]} /><SelectFilter label={t("是否需要退款")} value={requiresRefund} onChange={setRequiresRefund} options={[["false", t("不需要")], ["true", t("需要")]]} /><SelectFilter label={t("是否影响 Affiliate 佣金")} value={affectsAffiliateCommission} onChange={setAffectsAffiliateCommission} options={[["false", t("否")], ["true", t("是")]]} /></> : null}
             {state.kind === "assign-after-sale" && managedAfterSale ? <p className="text-muted-foreground text-sm">{t("此处仅分配售后负责人。审批、验收、退款和入库请在订单详情的“退货与退款”区域处理。")}</p> : null}
             {state.kind === "cancel" ? <Alert variant="destructive"><AlertTriangleIcon /><AlertTitle>{t("确认取消这张订单？")}</AlertTitle><AlertDescription>{t("取消会写入状态事件；已经完成或退款的订单不能在此取消。")}</AlertDescription></Alert> : null}
-            {state.kind !== "scan" ? <Field><FieldLabel>{t("备注（可选）")}</FieldLabel><Textarea value={note} onChange={(event) => setNote(event.target.value)} /></Field> : null}
+            {state.kind === "complete-without-code" ? (
+              <>
+                <Field>
+                  <FieldLabel>{t("情况说明（必填，至少 {min} 个字）", { min: CODELESS_NOTE_MIN_LENGTH })}</FieldLabel>
+                  <Textarea value={note} placeholder={t("例如：顾客当面付款，我亲手交给了她")} onChange={(event) => setNote(event.target.value)} />
+                </Field>
+                <label className="flex items-start gap-2 text-sm">
+                  <Checkbox className="mt-0.5" checked={codelessConfirmed} onCheckedChange={(value) => setCodelessConfirmed(value === true)} />
+                  <span>{t("我确认包裹已经交给顾客，这次没有核对取货码 / 配送码。")}</span>
+                </label>
+              </>
+            ) : state.kind !== "scan" && state.kind !== "reassign-picker" && state.kind !== "reassign-packer" ? <Field><FieldLabel>{t("备注（可选）")}</FieldLabel><Textarea value={note} onChange={(event) => setNote(event.target.value)} /></Field> : null}
           </FieldGroup>
         ) : null}
         {error ? (
           <Alert variant="destructive"><AlertTriangleIcon /><AlertTitle>{error.message}</AlertTitle><AlertDescription>{barcodeErrorDescription(error.details)}</AlertDescription></Alert>
         ) : null}
         <DialogFooter showCloseButton>
-          <Button disabled={busy || (state?.kind === "assign-rider" && !riderFeeKsh)} onClick={() => void submit()}>{busy ? t("正在保存...") : t("确认")}</Button>
+          <Button
+            variant={state?.kind === "complete-without-code" ? "destructive" : "default"}
+            disabled={busy
+              || (state?.kind === "assign-rider" && !riderFeeKsh)
+              || ((state?.kind === "reassign-picker" || state?.kind === "reassign-packer") && (!employeeId || reassignReason.trim().length < 2))
+              || (state?.kind === "complete-without-code" && (!codelessReason || note.trim().length < CODELESS_NOTE_MIN_LENGTH || !codelessConfirmed))}
+            onClick={() => void submit()}
+          >
+            {busy ? t("正在保存...") : state?.kind === "complete-without-code" ? t("确认无码补登") : t("确认")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1698,7 +1903,21 @@ function OrderTimeline({ events }: { events: FulfillmentEvent[] }) {
   return (
     <div className="flex flex-col gap-3">
       <div><h2 className="font-semibold">{t("状态时间线")}</h2><p className="text-muted-foreground text-sm">{t("当前状态不会覆盖历史事件。")}</p></div>
-      {events.length ? <ol className="flex flex-col gap-3 border-l pl-4">{events.map((event) => <li key={event.id} className="relative"><span className="absolute top-1.5 -left-[21px] size-2 rounded-full bg-primary" /><div className="flex flex-wrap items-center gap-2"><strong>{actionLabel(event.action)}</strong><StatusBadge status={event.newStatus} /><span className="text-muted-foreground text-xs">{formatDate(event.createdAt)}</span></div><p className="text-muted-foreground text-sm">{t("操作人：")}{event.actorAdminUser?.name ?? event.actorEmployee?.name ?? t("系统")}{event.relatedEmployee ? t(" · 关联员工：{name}", { name: event.relatedEmployee.name }) : ""}{event.deliveryRider ? t(" · 配送员：{name}", { name: event.deliveryRider.name }) : ""}</p>{event.note ? <p className="text-sm">{event.note}</p> : null}{event.scannedBarcode ? <p className="text-sm">{t("扫描：")}{event.scannedBarcode}{event.expectedBarcode ? t(" · 预期：{expectedBarcode}", { expectedBarcode: event.expectedBarcode }) : ""}</p> : null}</li>)}</ol> : <p className="text-muted-foreground text-sm">{t("尚无状态事件。")}</p>}
+      {events.length ? <ol className="flex flex-col gap-3 border-l pl-4">{events.map((event) => event.action === CODELESS_COMPLETION_ACTION ? (
+        // A completion without the customer's code is the one event that has
+        // to stand out: who did it, when, and why, in one red line.
+        <li key={event.id} className="relative rounded-lg border border-destructive bg-destructive/5 p-3">
+          <span className="absolute top-4 -left-[21px] size-2 rounded-full bg-destructive" />
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="destructive"><AlertTriangleIcon />{t("无码补登")}</Badge>
+            <strong>{event.actorAdminUser?.name ?? event.actorEmployee?.name ?? t("系统")}</strong>
+            <span className="text-sm">{formatDate(event.createdAt)}</span>
+            <StatusBadge status={event.newStatus} />
+          </div>
+          {event.note ? <p className="mt-1 text-sm">{event.note.replace(/^无码补登 · /, "")}</p> : null}
+          <p className="mt-1 text-muted-foreground text-xs">{t("这单没有核对取货码 / 配送码，由超级管理员补登为已交付。")}</p>
+        </li>
+      ) : <li key={event.id} className="relative"><span className="absolute top-1.5 -left-[21px] size-2 rounded-full bg-primary" /><div className="flex flex-wrap items-center gap-2"><strong>{actionLabel(event.action)}</strong><StatusBadge status={event.newStatus} /><span className="text-muted-foreground text-xs">{formatDate(event.createdAt)}</span></div><p className="text-muted-foreground text-sm">{t("操作人：")}{event.actorAdminUser?.name ?? event.actorEmployee?.name ?? t("系统")}{event.relatedEmployee ? t(" · 关联员工：{name}", { name: event.relatedEmployee.name }) : ""}{event.deliveryRider ? t(" · 配送员：{name}", { name: event.deliveryRider.name }) : ""}</p>{event.note ? <p className="text-sm">{event.note}</p> : null}{event.scannedBarcode ? <p className="text-sm">{t("扫描：")}{event.scannedBarcode}{event.expectedBarcode ? t(" · 预期：{expectedBarcode}", { expectedBarcode: event.expectedBarcode }) : ""}</p> : null}</li>)}</ol> : <p className="text-muted-foreground text-sm">{t("尚无状态事件。")}</p>}
     </div>
   );
 }
@@ -1739,11 +1958,13 @@ function barcodeErrorDescription(details?: Record<string, unknown>) {
 }
 
 function dialogTitle(kind: DialogKind) {
-  return ({ "assign-picker": t("分配拣货员工"), "assign-packer": t("分配打包员工"), scan: t("逐件 Barcode 核对"), "start-packing": t("开始打包"), "complete-packing": t("完成打包"), "assign-rider": t("分配配送员"), "confirm-pickup": t("确认顾客已取货"), "complete-delivery": t("用配送码确认送达"), exception: t("提交异常事实"), "assign-after-sale": t("处理售后订单"), cancel: t("取消订单"), "assign-node": t("指定履约点"), "resolve-exception": t("解决异常"), "write-off": t("作废订单并处理库存"), refund: t("登记已完成的退款") } as Record<DialogKind, string>)[kind];
+  return ({ "assign-picker": t("分配拣货员工"), "assign-packer": t("分配打包员工"), "reassign-picker": t("改派拣货员"), "reassign-packer": t("改派打包员"), "complete-without-code": t("补登已交付（无码）"), scan: t("逐件 Barcode 核对"), "start-packing": t("开始打包"), "complete-packing": t("完成打包"), "assign-rider": t("分配配送员"), "confirm-pickup": t("确认顾客已取货"), "complete-delivery": t("用配送码确认送达"), exception: t("提交异常事实"), "assign-after-sale": t("处理售后订单"), cancel: t("取消订单"), "assign-node": t("指定履约点"), "resolve-exception": t("解决异常"), "write-off": t("作废订单并处理库存"), refund: t("登记已完成的退款") } as Record<DialogKind, string>)[kind];
 }
 
 function employeeLabel(kind: DialogKind) {
   if (kind === "assign-picker") return t("拣货员工");
+  if (kind === "reassign-picker") return t("改派给哪位拣货员");
+  if (kind === "reassign-packer") return t("改派给哪位打包员");
   if (kind === "assign-packer") return t("打包员工");
   if (kind === "start-packing") return t("打包员工");
   if (kind === "complete-packing") return t("打包员工");
@@ -1752,7 +1973,7 @@ function employeeLabel(kind: DialogKind) {
 }
 
 function actionLabel(action: string) {
-  return ({ PAYMENT_CONFIRMED_PICK_TASK_CREATED: t("支付成功并生成拣货任务"), ASSIGN_PICKER: t("分配拣货员"), ASSIGN_PACKER: t("分配打包员"), CLAIM_PICKING_TASK: t("领取拣货任务"), START_PICKING: t("开始拣货"), ITEM_BARCODE_VERIFIED: t("商品 Barcode 核对成功"), BARCODE_REJECTED: t("Barcode 核对失败"), COMPLETE_PICKING: t("完成拣货"), START_PACKING: t("开始打包"), COMPLETE_PACKING: t("完成打包"), PRINT_PACKAGE_LABEL: t("已打印面单"), READY_FOR_PICKUP: t("等待顾客自提"), READY_FOR_DISPATCH: t("等待发货"), ASSIGN_DELIVERY_RIDER: t("分配配送员"), HAND_TO_DELIVERY_RIDER: t("已交给配送员"), CONFIRM_DELIVERY: t("确认送达"), CONFIRM_CUSTOMER_PICKUP: t("确认已取货"), SUBMIT_EXCEPTION_FACT: t("提交异常事实"), ASSIGN_AFTER_SALE_OWNER: t("分配售后负责人"), UPDATE_AFTER_SALE_CASE: t("更新售后处理"), CANCEL_ORDER: t("取消订单") } as Record<string, string>)[action] ?? action;
+  return ({ PAYMENT_CONFIRMED_PICK_TASK_CREATED: t("支付成功并生成拣货任务"), ASSIGN_PICKER: t("分配拣货员"), ASSIGN_PACKER: t("分配打包员"), REASSIGN_PICKER: t("改派拣货员"), REASSIGN_PACKER: t("改派打包员"), [CODELESS_COMPLETION_ACTION]: t("无码补登"), CLAIM_PICKING_TASK: t("领取拣货任务"), START_PICKING: t("开始拣货"), ITEM_BARCODE_VERIFIED: t("商品 Barcode 核对成功"), BARCODE_REJECTED: t("Barcode 核对失败"), COMPLETE_PICKING: t("完成拣货"), START_PACKING: t("开始打包"), COMPLETE_PACKING: t("完成打包"), PRINT_PACKAGE_LABEL: t("已打印面单"), READY_FOR_PICKUP: t("等待顾客自提"), READY_FOR_DISPATCH: t("等待发货"), ASSIGN_DELIVERY_RIDER: t("分配配送员"), HAND_TO_DELIVERY_RIDER: t("已交给配送员"), CONFIRM_DELIVERY: t("确认送达"), CONFIRM_CUSTOMER_PICKUP: t("确认已取货"), SUBMIT_EXCEPTION_FACT: t("提交异常事实"), ASSIGN_AFTER_SALE_OWNER: t("分配售后负责人"), UPDATE_AFTER_SALE_CASE: t("更新售后处理"), CANCEL_ORDER: t("取消订单") } as Record<string, string>)[action] ?? action;
 }
 
 function statusLabel(status: string) {
