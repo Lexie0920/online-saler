@@ -47,6 +47,15 @@ type RiderDelivery = {
 type RiderBoard = {
   rider: { id: string; name: string };
   counts: { awaitingDelivery: number; completedToday: number; failedToday: number };
+  /** The rider's own pay (2026-10-14 weekly payouts). Older API builds omit it. */
+  pay?: {
+    earnedThisWeekKsh: number;
+    earnedThisWeekCount: number;
+    unsettledKsh: number;
+    unsettledCount: number;
+    settledThisWeekKsh: number;
+    lastPayout: { amountKsh: number; mpesaCode: string; paidAt: string; itemCount: number } | null;
+  };
   deliveries: RiderDelivery[];
 };
 
@@ -142,6 +151,27 @@ export function RiderDeliveriesPage() {
           <RefreshCwIcon className={loading ? "animate-spin" : ""} />
         </Button>
       </div>
+
+      {board?.pay ? (
+        <div className="flex flex-col gap-0.5 rounded-md border px-3 py-2 text-sm" aria-label={t("骑手费结算")}>
+          <p>
+            {t("本周已结算 KSh {settled} · 待结算 KSh {unsettled}（{count} 单）", {
+              settled: board.pay.settledThisWeekKsh,
+              unsettled: board.pay.unsettledKsh,
+              count: board.pay.unsettledCount
+            })}
+          </p>
+          {board.pay.lastPayout ? (
+            <p className="text-muted-foreground text-xs">
+              {t("上次到账 KSh {amount} · M-Pesa {code} · {date}", {
+                amount: board.pay.lastPayout.amountKsh,
+                code: board.pay.lastPayout.mpesaCode,
+                date: formatMoment(board.pay.lastPayout.paidAt)
+              })}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {error ? <p className="text-destructive text-sm px-1">{error}</p> : null}
       {message ? <p className="text-sm text-emerald-600 px-1">{message}</p> : null}

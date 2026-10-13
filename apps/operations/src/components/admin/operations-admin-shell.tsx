@@ -25,6 +25,7 @@ import {
   TruckIcon,
   UserCogIcon,
   UsersIcon,
+  WalletCardsIcon,
   XCircleIcon
 } from "lucide-react";
 
@@ -196,7 +197,9 @@ export const operationsModules: ModuleNav[] = [
       { label: "待确认佣金", href: "/affiliate/commissions/pending", icon: ClipboardCheckIcon, permission: "action.affiliate.view" },
       { label: "已确认佣金", href: "/affiliate/commissions/confirmed", icon: ShieldCheckIcon, permission: "action.affiliate.view" },
       { label: "已支付佣金", href: "/affiliate/commissions/paid", icon: PackageCheckIcon, permission: "action.affiliate.view" },
-      { label: "异常佣金", href: "/affiliate/commissions/exceptions", icon: XCircleIcon, permission: "action.affiliate.view" }
+      { label: "异常佣金", href: "/affiliate/commissions/exceptions", icon: XCircleIcon, permission: "action.affiliate.view" },
+      // 2026-10-14: the Monday M-Pesa run. Finance and super admins only.
+      { label: "周结付款", href: "/affiliate/payouts", icon: WalletCardsIcon, permission: "finance.payout" }
     ]
   },
   {
