@@ -310,7 +310,7 @@ export async function updateAffiliateCampaignStatus(
 
 export async function getAffiliateDashboard(session: CustomerSession | null) {
   const affiliate = await requireActiveAffiliate(session);
-  const [clicks, orders, commissions, collections, campaigns] = await Promise.all([
+  const [clicks, orders, commissions, collections, campaigns, payouts] = await Promise.all([
     prisma.affiliateClick.findMany({
       where: { affiliateId: affiliate.id },
       select: {
@@ -326,6 +326,13 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     prisma.commission.findMany({ where: { affiliateId: affiliate.id }, select: { status: true, commissionAmountKsh: true } }),
     prisma.collection.count({ where: { affiliateId: affiliate.id } }),
     prisma.campaign.count({ where: { affiliateId: affiliate.id } }),
+    // Weekly M-Pesa payouts recorded by finance (2026-10-14): what reached this promoter.
+    prisma.payout.findMany({
+      where: { affiliateId: affiliate.id, payeeType: "AFFILIATE" },
+      select: { id: true, amountKsh: true, itemCount: true, mpesaCode: true, paidAt: true, periodStart: true, periodEnd: true },
+      orderBy: { paidAt: "desc" },
+      take: 52,
+    }),
   ]);
   const topCollection = topByKey(clicks.filter((click) => click.collection).map((click) => ({
     key: click.collection!.slug,
@@ -354,6 +361,16 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       campaigns,
     },
     commission: commissionTotals,
+    payouts: payouts.map((payout) => ({
+      id: payout.id,
+      amountKsh: payout.amountKsh,
+      itemCount: payout.itemCount,
+      mpesaCode: payout.mpesaCode,
+      paidAt: payout.paidAt.toISOString(),
+      periodStart: payout.periodStart.toISOString(),
+      // The stored end is the next Monday 00:00; the week's last day is the Sunday before it.
+      periodEnd: payout.periodEnd.toISOString(),
+    })),
   };
 }
 

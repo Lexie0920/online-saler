@@ -8,6 +8,7 @@ import {
   InventoryItemStatus,
   PaymentKind,
   PaymentStatus,
+  PayoutPayeeType,
   ProductStatus,
   RefundRequestStatus,
   prisma
@@ -79,6 +80,8 @@ export type BusinessReport = {
     deliveryFailures: number;
     /** 无码补登: orders a super admin completed without the customer's code, in the period. */
     codelessCompletions: number;
+    /** Rider pay sent in the period: weekly payouts recorded in 周结付款, by paidAt. */
+    riderFeePaidKsh: number;
     byEmployee: Array<{ name: string; picked: number; packed: number }>;
   };
   /** 分销团队增长: see affiliate-team.ts for every definition. */
@@ -292,7 +295,7 @@ async function collectInventory(current: Range, previous: Range, now: Date): Pro
 
 export async function collectWarehouse(current: Range, previous: Range, now: Date): Promise<BusinessReport["warehouse"]> {
   const stages = Object.entries(QUEUE_STAGES) as Array<[keyof typeof QUEUE_STAGES, FulfillmentStatus[]]>;
-  const [queueCounts, overdue, packedNow, packedBefore, completedNow, completedBefore, deliveryFailures, codelessCompletions, pickers, packers] =
+  const [queueCounts, overdue, packedNow, packedBefore, completedNow, completedBefore, deliveryFailures, codelessCompletions, pickers, packers, riderPayouts] =
     await Promise.all([
       Promise.all(stages.map(([, statuses]) => prisma.orderFulfillment.count({ where: { status: { in: statuses } } }))),
       prisma.orderFulfillment.count({
@@ -318,7 +321,8 @@ export async function collectWarehouse(current: Range, previous: Range, now: Dat
         by: ["packedByEmployeeId"],
         where: { packedAt: current, packedByEmployeeId: { not: null } },
         _count: true
-      })
+      }),
+      prisma.payout.aggregate({ where: { payeeType: PayoutPayeeType.RIDER, paidAt: current }, _sum: { amountKsh: true } })
     ]);
 
   const work = new Map<string, { picked: number; packed: number }>();
@@ -343,6 +347,7 @@ export async function collectWarehouse(current: Range, previous: Range, now: Dat
     completed: { current: completedNow, previous: completedBefore },
     deliveryFailures,
     codelessCompletions,
+    riderFeePaidKsh: riderPayouts._sum.amountKsh ?? 0,
     byEmployee: [...work.entries()]
       .map(([id, counts]) => ({ name: names.get(id) ?? "Unknown", ...counts }))
       .sort((a, b) => b.picked + b.packed - (a.picked + a.packed))
@@ -355,7 +360,7 @@ export async function collectWarehouse(current: Range, previous: Range, now: Dat
  */
 async function readAffiliateTeam(current: Range, previous: Range) {
   const notRejected = { not: CommissionStatus.REJECTED };
-  const [affiliates, employees, adminUsers, clicksNow, clicksBefore, lastClicks, commissionNow, commissionBefore, paid] =
+  const [affiliates, employees, adminUsers, clicksNow, clicksBefore, lastClicks, commissionNow, commissionBefore, paidOneByOne, paidByPayout] =
     await Promise.all([
       prisma.affiliate.findMany({
         select: {
@@ -391,7 +396,10 @@ async function readAffiliateTeam(current: Range, previous: Range) {
         where: { createdAt: previous, status: notRejected },
         _sum: { commissionAmountKsh: true }
       }),
-      prisma.commission.aggregate({ where: { paidAt: current }, _sum: { commissionAmountKsh: true } })
+      // Paid commission = weekly payouts recorded in 周结付款 (2026-10-14), plus
+      // any commission still marked paid one by one without a payout.
+      prisma.commission.aggregate({ where: { paidAt: current, payoutId: null }, _sum: { commissionAmountKsh: true } }),
+      prisma.payout.aggregate({ where: { payeeType: PayoutPayeeType.AFFILIATE, paidAt: current }, _sum: { amountKsh: true } })
     ]);
 
   const staff: StaffRow[] = [
@@ -414,7 +422,7 @@ async function readAffiliateTeam(current: Range, previous: Range) {
     clicks: { current: counts(clicksNow), previous: counts(clicksBefore) },
     lastClicks: lastClicks.map((r) => ({ affiliateId: r.affiliateId, lastClickAt: r._max.clickedAt })),
     commission: { current: amounts(commissionNow), previous: amounts(commissionBefore) },
-    commissionPaidKsh: paid._sum.commissionAmountKsh ?? 0
+    commissionPaidKsh: (paidOneByOne._sum.commissionAmountKsh ?? 0) + (paidByPayout._sum.amountKsh ?? 0)
   };
 }
 

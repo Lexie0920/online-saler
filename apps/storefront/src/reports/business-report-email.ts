@@ -86,6 +86,7 @@ function buildSections(report: BusinessReport, vs: string): Section[] {
           value: `${count(warehouse.codelessCompletions)} 单`,
           hint: "超级管理员没用取货码/配送码、直接补登已交付的订单"
         },
+        { label: "期间已付骑手费", value: ksh(warehouse.riderFeePaidKsh), hint: "周结付款里登记的 M-Pesa 付款" },
         { label: "现在待拣货", value: count(warehouse.queues.toPick) },
         { label: "现在待打包", value: count(warehouse.queues.toPack) },
         { label: "已打包未发出", value: count(warehouse.queues.packedNotSent) },
@@ -160,7 +161,7 @@ function affiliateSection(team: BusinessReport["affiliates"], paidOrders: number
         hint: `已付款订单 ÷ 点击；${vs} ${rate(all.orders.previous, all.clicks.previous)}`
       },
       { label: "期间产生佣金", value: ksh(all.commissionKsh.current), change: change(all.commissionKsh, vs), hint: "不含已驳回" },
-      { label: "期间已付佣金", value: ksh(team.commissionPaidKsh) },
+      { label: "期间已付佣金", value: ksh(team.commissionPaidKsh), hint: "周结付款里登记的 M-Pesa 付款" },
       {
         label: team.dormant.count ? "⚠ 现在沉睡的推广员" : "现在沉睡的推广员",
         value: `${count(team.dormant.count)} / ${count(team.dormant.of)}`,

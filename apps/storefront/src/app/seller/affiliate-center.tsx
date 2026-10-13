@@ -496,6 +496,7 @@ function Analytics({ payload, t }: { payload: AffiliateSessionPayload; t: Transl
 
 function Commission({ payload, t }: { payload: AffiliateSessionPayload; t: Translate }) {
   const totals = payload.dashboard?.commission ?? {};
+  const payouts = payload.dashboard?.payouts ?? [];
   const states = [
     ["PENDING", t("affiliate.commission.pending"), <CircleDollarSign key="pending" />],
     ["CONFIRMED", t("affiliate.commission.confirmed"), <CircleDollarSign key="confirmed" />],
@@ -514,10 +515,39 @@ function Commission({ payload, t }: { payload: AffiliateSessionPayload; t: Trans
         ))}
       </div>
       <Card>
+        <CardHeader>
+          <CardTitle>{t("affiliate.commission.historyTitle")}</CardTitle>
+          <CardDescription>{t("affiliate.commission.historyBody")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {payouts.length ? (
+            <ul className="space-y-2">
+              {payouts.map((payout) => (
+                <li key={payout.id} className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                  <strong className="font-medium">
+                    {t("affiliate.commission.historyLine", { amount: payout.amountKsh.toLocaleString("en-KE"), code: payout.mpesaCode, date: payoutDay(payout.paidAt) })}
+                  </strong>
+                  <span className="block text-xs text-muted-foreground">
+                    {t("affiliate.commission.historyWeek", { from: payoutDay(payout.periodStart), to: payoutDay(new Date(new Date(payout.periodEnd).getTime() - 1).toISOString()), count: payout.itemCount })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">{t("affiliate.commission.historyEmpty")}</p>
+          )}
+        </CardContent>
+      </Card>
+      <Card>
         <CardHeader><CardTitle>{t("affiliate.commission.howTitle")}</CardTitle><CardDescription>{t("affiliate.commission.howBody")}</CardDescription></CardHeader>
       </Card>
     </div>
   );
+}
+
+/** A Nairobi calendar date (UTC+3), e.g. 2026-10-12. */
+function payoutDay(iso: string) {
+  return new Date(new Date(iso).getTime() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function MetricCard({ label, value }: { label: string; value: string }) {

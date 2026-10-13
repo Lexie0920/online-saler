@@ -64,6 +64,18 @@ export type AffiliateDashboard = {
     campaigns: number;
   };
   commission: Record<string, number>;
+  /** Weekly M-Pesa payouts already sent, newest first. */
+  payouts?: AffiliatePayout[];
+};
+
+export type AffiliatePayout = {
+  id: string;
+  amountKsh: number;
+  itemCount: number;
+  mpesaCode: string;
+  paidAt: string;
+  periodStart: string;
+  periodEnd: string;
 };
 
 export type AffiliateSessionPayload = {

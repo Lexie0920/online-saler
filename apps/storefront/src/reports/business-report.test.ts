@@ -240,6 +240,7 @@ function sampleReport(): BusinessReport {
       completed: same(3),
       deliveryFailures: 0,
       codelessCompletions: 2,
+      riderFeePaidKsh: 450,
       byEmployee: [{ name: "Wanjiku", picked: 3, packed: 4 }]
     },
     affiliates: affiliateTeam,
@@ -269,6 +270,9 @@ assert.ok(!email.html.includes("⚠ 异常订单"), "no exceptions, no warning")
 assert.ok(email.text.includes("⚠ 无码补登：2 单"), "code-less completions are counted and flagged");
 const noCodeless = sampleReport();
 noCodeless.warehouse = { ...noCodeless.warehouse, codelessCompletions: 0 };
+// Weekly payouts (周结付款, 2026-10-14): what was sent to riders and promoters in the period.
+assert.ok(email.text.includes("期间已付骑手费：KSh 450"), "rider pay sent in the period is shown");
+assert.ok(email.text.includes("期间已付佣金：KSh 60"), "commission paid in the period is shown");
 assert.ok(renderBusinessReportEmail(noCodeless).text.includes("- 无码补登：0 单"), "none, no warning");
 
 // The affiliate team section.
@@ -343,7 +347,9 @@ const fakeFetch = (async (url: string, init: RequestInit) => {
   // 无码补登 is read from the fulfillment events in the period, by its action.
   const eventCounts: unknown[] = [];
   const db = prisma as unknown as Record<string, Record<string, unknown>>;
-  const saved = { count: db.orderFulfillment.count, groupBy: db.orderFulfillment.groupBy, eventCount: db.fulfillmentEvent.count, employees: db.employee.findMany };
+  const saved = { count: db.orderFulfillment.count, groupBy: db.orderFulfillment.groupBy, eventCount: db.fulfillmentEvent.count, employees: db.employee.findMany, payoutSum: db.payout.aggregate };
+  const payoutQueries: unknown[] = [];
+  db.payout.aggregate = async (args: unknown) => { payoutQueries.push(args); return { _sum: { amountKsh: 450 } }; };
   db.orderFulfillment.count = async () => 0;
   db.orderFulfillment.groupBy = async () => [];
   db.fulfillmentEvent.count = async (args: unknown) => { eventCounts.push(args); return 3; };
@@ -352,12 +358,15 @@ const fakeFetch = (async (url: string, init: RequestInit) => {
     const range = { gte: daily.start, lt: daily.end };
     const warehouse = await collectWarehouse(range, { gte: daily.previousStart, lt: daily.previousEnd }, mondayMorning);
     assert.equal(warehouse.codelessCompletions, 3);
+    assert.equal(warehouse.riderFeePaidKsh, 450, "rider pay comes from recorded payouts");
+    assert.deepEqual(payoutQueries, [{ where: { payeeType: "RIDER", paidAt: range }, _sum: { amountKsh: true } }]);
     assert.deepEqual(eventCounts, [{ where: { action: "CODELESS_COMPLETION", createdAt: range } }]);
   } finally {
     db.orderFulfillment.count = saved.count;
     db.orderFulfillment.groupBy = saved.groupBy;
     db.fulfillmentEvent.count = saved.eventCount;
     db.employee.findMany = saved.employees;
+    db.payout.aggregate = saved.payoutSum;
   }
 
   console.log("business report tests ok");
