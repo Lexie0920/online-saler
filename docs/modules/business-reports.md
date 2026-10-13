@@ -32,6 +32,10 @@ An order counts as sold when its last payment clears: the full payment, or the
 balance on a deposit order. A deposit alone is counted as a new hold, not as a
 sale.
 
+The warehouse section also shows **期间已付骑手费**: rider pay sent in the
+period, the sum of rider payouts recorded in 推广中心 → 周结付款 (by paidAt,
+since 2026-10-14).
+
 ## Affiliate team growth (分销团队增长)
 
 Added 2026-10-10. Code: `apps/storefront/src/reports/affiliate-team.ts`.
@@ -47,7 +51,7 @@ app, so the two can be checked against each other:
 | 分销订单 | Paid orders carrying the promoter, counted when the last payment cleared (same rule as 成交订单) |
 | 分销销售额 | Item subtotal of those orders, delivery fee excluded (like 带来销售额 on 推广中心, and the commission base) |
 | 点击→下单转化率 | 分销订单 ÷ 总点击, with the previous period's rate beside it |
-| 期间产生佣金 / 已付佣金 | Commission created in the period (rejected excluded) / commission marked paid in the period |
+| 期间产生佣金 / 已付佣金 | Commission created in the period (rejected excluded) / commission paid in the period: weekly M-Pesa payouts recorded in 周结付款 (by paidAt, since 2026-10-14) plus any commission still marked paid one by one |
 | 现在沉睡的推广员 | Right now: active promoters whose links got no click in the last 7 days, out of all active promoters. A promoter who never got a click counts too, with how long ago they joined |
 
 Below the rows: a 全部 vs 外部 table (clicks, orders, sales, commission and
