@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatKsh, formatMoment, operationsRequester } from "@/lib/operations-request";
 import { t } from "@/i18n/runtime";
+import { MpesaBulkPanel, type PayoutBatch } from "./mpesa-bulk-panel";
 
 /**
  * 周结付款 — the Monday M-Pesa run (owner, 2026-10-14, "做法一").
@@ -21,6 +22,10 @@ import { t } from "@/i18n/runtime";
  * commissions and riders' delivery pay. Finance sends each amount by hand with
  * M-Pesa Send Money, then types the transaction code from the M-Pesa SMS here.
  * That marks everything in the row paid at once. This page never moves money.
+ *
+ * Since 2026-10-14 the usual way is the M-Pesa bulk file (MpesaBulkPanel):
+ * export once, upload to the M-Pesa for Business portal, upload the results
+ * back. Typing a code per row stays as the fallback.
  */
 
 type PayoutItem = { kind: "COMMISSION" | "RIDER_FEE"; id: string; orderNumber: string; amountKsh: number; at: string | null };
@@ -36,6 +41,8 @@ type SheetRow = {
   count: number;
   items: PayoutItem[];
   selfPayment: { by: string; message: string } | null;
+  bulkPhone: string | null;
+  exported: { batchId: string; batchReference: string; lineReference: string } | null;
 };
 
 type PaidRow = {
@@ -64,6 +71,7 @@ type Sheet = {
     paidPeople: number;
   };
   rows: SheetRow[];
+  batches: PayoutBatch[];
   paid: PaidRow[];
   earlierUnpaid: { commissionKsh: number; commissionCount: number; riderFeeKsh: number; riderFeeCount: number };
   awaitingConfirmation: { count: number; amountKsh: number };
@@ -239,10 +247,20 @@ export function WeeklyPayoutsPage() {
       {error ? <p className="text-destructive text-sm" role="alert">{error}</p> : null}
       {notice ? <p className="rounded-md border bg-card px-3 py-2 text-sm" role="status">{notice}</p> : null}
 
+      {sheet ? (
+        <MpesaBulkPanel
+          accessToken={accessToken}
+          week={sheet.week.firstDay}
+          rows={sheet.rows}
+          batches={sheet.batches ?? []}
+          onChanged={() => load(sheet.week.firstDay)}
+        />
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>{t("待付款项")}</CardTitle>
-          <CardDescription>{t("每人一行。点「展开」看包含哪些订单；转账后点「登记已付」。")}</CardDescription>
+          <CardDescription>{t("每人一行。点「展开」看包含哪些订单。平时用上面的 M-Pesa 批量付款；单独手动转账的，转账后点「登记已付」。")}</CardDescription>
         </CardHeader>
         <CardContent>
           {sheet?.rows.length ? (
@@ -271,7 +289,10 @@ export function WeeklyPayoutsPage() {
                           {row.payeeType === "AFFILIATE" ? t("推广员") : t("骑手")}
                         </Badge>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{row.phone ?? <span className="text-destructive">{t("没有手机号")}</span>}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {row.phone ?? <span className="text-destructive">{t("没有手机号")}</span>}
+                        {row.phone && !row.bulkPhone ? <div className="text-destructive font-sans">{t("不是有效的 M-Pesa 手机号，不能放进批量文件")}</div> : null}
+                      </TableCell>
                       <TableCell className="font-semibold">{formatKsh(row.amountKsh)}</TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm" onClick={() => setOpen((state) => ({ ...state, [row.payeeKey]: !state[row.payeeKey] }))}>
@@ -279,7 +300,12 @@ export function WeeklyPayoutsPage() {
                         </Button>
                       </TableCell>
                       <TableCell>
-                        {row.selfPayment ? (
+                        {row.exported ? (
+                          <div className="flex max-w-56 flex-col gap-1">
+                            <Badge variant="outline">{t("已导出，等待 M-Pesa 结果")}</Badge>
+                            <span className="text-muted-foreground font-mono text-xs">{row.exported.lineReference}</span>
+                          </div>
+                        ) : row.selfPayment ? (
                           <p className="text-destructive max-w-56 text-xs">{t("这是你自己的款项，不能由你本人登记。请让另一位财务或超级管理员登记。")}</p>
                         ) : paying === row.payeeKey ? null : (
                           <Button size="sm" onClick={() => startPaying(row)}>{t("登记已付")}</Button>

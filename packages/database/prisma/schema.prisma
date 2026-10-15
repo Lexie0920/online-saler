@@ -238,6 +238,7 @@ model AdminUser {
   requestedRefunds       RefundRequest[]       @relation("RefundRequestedBy")
   reviewedRefunds        RefundRequest[]       @relation("RefundReviewedBy")
   recordedPayouts        Payout[]              @relation("PayoutPaidBy")
+  exportedPayoutBatches  PayoutBatch[]         @relation("PayoutBatchExportedBy")
   lastLoginAt            DateTime?
   lockedAt               DateTime?
   disabledAt             DateTime?
@@ -868,6 +869,19 @@ enum CommissionStatus {
 enum PayoutPayeeType {
   AFFILIATE
   RIDER
+}
+
+enum PayoutBatchStatus {
+  OPEN
+  RECONCILED
+  CANCELLED
+}
+
+enum PayoutBatchLineStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
 }
 
 enum CustomerServiceCaseStatus {
@@ -1778,12 +1792,67 @@ model Payout {
   paidByAdminUser      AdminUser          @relation("PayoutPaidBy", fields: [paidByAdminUserId], references: [id], onDelete: Restrict)
   commissions          Commission[]
   riderFeeFulfillments OrderFulfillment[] @relation("FulfillmentRiderFeePayout")
+  /// Set when the payout came from an M-Pesa bulk payment results report.
+  batchLine            PayoutBatchLine?
   createdAt            DateTime           @default(now())
 
   @@index([payeeType, paidAt])
   @@index([affiliateId, paidAt])
   @@index([deliveryRiderId, paidAt])
   @@index([payeeKey, periodStart])
+}
+
+/// One M-Pesa for Business bulk payment file exported from the weekly payout
+/// page (owner, 2026-10-14). Its lines are the people in the file; while a
+/// line is PENDING that person's week is locked against a second export or a
+/// manual "登记已付". The results report from the portal settles each line.
+model PayoutBatch {
+  id                     String            @id @default(uuid())
+  /// Short reference printed into every row of the file, e.g. "PB7K3Q9M".
+  reference              String            @unique
+  status                 PayoutBatchStatus @default(OPEN)
+  periodStart            DateTime
+  periodEnd              DateTime
+  lineCount              Int
+  totalKsh               Int
+  exportedByAdminUserId  String
+  exportedAt             DateTime          @default(now())
+  cancelledByAdminUserId String?
+  cancelledAt            DateTime?
+  reconciledAt           DateTime?
+  exportedByAdminUser    AdminUser         @relation("PayoutBatchExportedBy", fields: [exportedByAdminUserId], references: [id], onDelete: Restrict)
+  lines                  PayoutBatchLine[]
+  createdAt              DateTime          @default(now())
+
+  @@index([periodStart, status])
+}
+
+model PayoutBatchLine {
+  id                String                @id @default(uuid())
+  batchId           String
+  /// "<batch reference>-NN", the remarks/reference value in the file.
+  reference         String                @unique
+  status            PayoutBatchLineStatus @default(PENDING)
+  payeeType         PayoutPayeeType
+  payeeKey          String
+  payeeName         String
+  /// 2547XXXXXXXX as written into the file.
+  phone             String
+  amountKsh         Int
+  /// The PayoutItem list (commission / rider-fee ids) the amount covered when exported.
+  items             Json
+  payoutId          String?               @unique
+  mpesaCode         String?
+  resultStatus      String?
+  resultReason      String?
+  resultCompletedAt String?
+  resultAt          DateTime?
+  batch             PayoutBatch           @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  payout            Payout?               @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  createdAt         DateTime              @default(now())
+
+  @@index([batchId])
+  @@index([payeeKey, status])
 }
 
 model CustomerServiceCase {

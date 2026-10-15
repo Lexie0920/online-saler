@@ -30,6 +30,7 @@ import { OperationsPaymentReviewController } from "./operations-payment-review.c
 import { OperationsPaymentReviewService } from "./operations-payment-review.service";
 import { OperationsPayoutController } from "./operations-payout.controller";
 import { OperationsPayoutService } from "./operations-payout.service";
+import { OperationsPayoutBatchService } from "./operations-payout-batch.service";
 import { OperationsRiderController, OperationsRiderRosterController } from "./operations-rider.controller";
 import { OperationsRiderService } from "./operations-rider.service";
 import { OperationsProductBatchController } from "./operations-product-batch.controller";
@@ -80,6 +81,7 @@ import { OperationsWarehouseService } from "./operations-warehouse.service";
     OperationsDepositHoldsService,
     OperationsPaymentReviewService,
     OperationsPayoutService,
+    OperationsPayoutBatchService,
     OperationsRiderService,
     OperationsWarehouseService,
     OperationsAffiliateService,

@@ -168,6 +168,9 @@ function fixture(t: TestContext, options: { commissions?: Row[]; fees?: Row[]; p
         return row;
       }
     },
+    // No M-Pesa bulk files in these tests; see operations-payout-batch.service.spec.ts.
+    payoutBatch: { findMany: async () => [] },
+    payoutBatchLine: { findMany: async () => [] },
     auditLog: { create: async ({ data }: { data: Row }) => { audits.push(data); return data; } },
     adminUser: { findUnique: async () => payer }
   };

@@ -9,6 +9,8 @@ import {
   ActorType,
   CommissionStatus,
   FulfillmentStatus,
+  PayoutBatchLineStatus,
+  PayoutBatchStatus,
   PayoutPayeeType,
   Prisma,
   SourceApp,
@@ -17,6 +19,7 @@ import {
 import { OperationsAccessService } from "./operations-access.service";
 import { commissionOrderInclude } from "./operations-affiliate.service";
 import { commissionEligibility } from "./operations-commission-policy";
+import { bulkPhone } from "./mpesa-bulk-format";
 import {
   buildPayoutSheet,
   normalizeMpesaCode,
@@ -48,7 +51,7 @@ import {
 
 export const FINANCE_PAYOUT = "finance.payout";
 
-type Db = Prisma.TransactionClient;
+export type Db = Prisma.TransactionClient;
 
 export type PayoutSheetInput = { adminUserId?: string; week?: string };
 
@@ -62,7 +65,7 @@ export type MarkPayoutPaidInput = {
   expectedAmountKsh?: number;
 };
 
-const SELF_PAYMENT_MESSAGE =
+export const SELF_PAYMENT_MESSAGE =
   "You cannot record a payout to yourself. Another finance or super admin account has to record this one.";
 
 const riderSelect = {
@@ -87,6 +90,8 @@ export class OperationsPayoutService {
     return prisma.$transaction(async (tx) => {
       const payer = await loadPayer(tx, session.adminUser!.id);
       const { rows, identities } = await loadSheet(tx, week, now);
+      const exported = await pendingBatchLines(tx, week);
+      const batches = await loadWeekBatches(tx, week);
       const [paid, olderCommissions, olderRiderFees, pending] = await Promise.all([
         tx.payout.findMany({
           where: { periodStart: week.start },
@@ -143,8 +148,18 @@ export class OperationsPayoutService {
         },
         rows: rows.map((row) => {
           const match = selfPaymentMatch(payer, identities.get(row.payeeKey)!);
-          return { ...row, selfPayment: match ? { by: match, message: SELF_PAYMENT_MESSAGE } : null };
+          const line = exported.get(row.payeeKey);
+          return {
+            ...row,
+            selfPayment: match ? { by: match, message: SELF_PAYMENT_MESSAGE } : null,
+            /** 2547XXXXXXXX for the bulk file, or null: this person cannot go into a bulk file. */
+            bulkPhone: bulkPhone(row.phone),
+            /** In an exported bulk file still waiting for its M-Pesa results. */
+            exported: line ? { batchId: line.batchId, batchReference: line.batchReference, lineReference: line.lineReference } : null
+          };
         }),
+        /** M-Pesa bulk files exported for this week, newest first. */
+        batches,
         paid: paid.map((payout) => ({
           ...payout,
           paidAt: payout.paidAt.toISOString(),
@@ -211,102 +226,12 @@ export class OperationsPayoutService {
 
         const payer = await loadPayer(tx, actor.id);
         if (selfPaymentMatch(payer, identities.get(row.payeeKey)!)) throw new ForbiddenException(SELF_PAYMENT_MESSAGE);
-
-        const payout = await tx.payout.create({
-          data: {
-            payeeType: row.payeeType === "AFFILIATE" ? PayoutPayeeType.AFFILIATE : PayoutPayeeType.RIDER,
-            payeeKey: row.payeeKey,
-            affiliateId: row.affiliateId,
-            deliveryRiderId: row.deliveryRiderId,
-            payeeName: row.name,
-            payeePhone: row.phone,
-            amountKsh: row.amountKsh,
-            itemCount: row.count,
-            mpesaCode,
-            periodStart: week.start,
-            periodEnd: week.end,
-            paidByAdminUserId: actor.id,
-            paidAt: now,
-            note
-          }
-        });
-
-        const commissionIds = row.items.filter((item) => item.kind === "COMMISSION").map((item) => item.id);
-        const feeIds = row.items.filter((item) => item.kind === "RIDER_FEE").map((item) => item.id);
-        const paymentNote = [`Weekly payout ${week.firstDay}~${week.lastDay}`, `M-Pesa ${mpesaCode}`, note].filter(Boolean).join(" · ");
-
-        if (commissionIds.length) {
-          // The existing CONFIRMED → PAID step, for every commission at once.
-          const changed = await tx.commission.updateMany({
-            where: { id: { in: commissionIds }, ...payableCommissionWhere },
-            data: { status: CommissionStatus.PAID, paidAt: now, payoutId: payout.id, note: paymentNote }
-          });
-          if (changed.count !== commissionIds.length) {
-            throw new ConflictException("A commission in this row changed while recording. Nothing was saved; refresh and try again.");
-          }
-        }
-        if (feeIds.length) {
-          const changed = await tx.orderFulfillment.updateMany({
-            where: { id: { in: feeIds }, ...unpaidRiderFeeWhere },
-            data: { riderFeePayoutId: payout.id }
-          });
-          if (changed.count !== feeIds.length) {
-            throw new ConflictException("A delivery in this row changed while recording. Nothing was saved; refresh and try again.");
-          }
+        const exported = (await pendingBatchLines(tx, week)).get(row.payeeKey);
+        if (exported) {
+          throw new ConflictException(`This person is in M-Pesa bulk file ${exported.batchReference}, which is waiting for its results. Upload the portal's results report, or cancel that export, before recording a payment by hand.`);
         }
 
-        const audit = {
-          actorType: ActorType.EMPLOYEE,
-          actorId: actor.linkedEmployeeId,
-          actorAdminUserId: actor.id,
-          sourceApp: SourceApp.OPERATIONS,
-          reason: paymentNote
-        };
-        await tx.auditLog.create({
-          data: {
-            ...audit,
-            module: "FINANCE",
-            entityType: "Payout",
-            entityId: payout.id,
-            action: "PAYOUT_RECORDED",
-            afterJson: {
-              payeeType: payout.payeeType,
-              payeeKey: payout.payeeKey,
-              payeeName: payout.payeeName,
-              payeePhone: payout.payeePhone,
-              amountKsh: payout.amountKsh,
-              itemCount: payout.itemCount,
-              mpesaCode: payout.mpesaCode,
-              periodStart: payout.periodStart.toISOString(),
-              periodEnd: payout.periodEnd.toISOString(),
-              commissionIds,
-              riderFeeFulfillmentIds: feeIds
-            }
-          }
-        });
-        for (const item of row.items) {
-          await tx.auditLog.create({
-            data: item.kind === "COMMISSION"
-              ? {
-                  ...audit,
-                  module: "AFFILIATE",
-                  entityType: "Commission",
-                  entityId: item.id,
-                  action: "COMMISSION_RECORD_PAYMENT",
-                  beforeJson: { status: CommissionStatus.CONFIRMED, paidAt: null, payoutId: null, commissionAmountKsh: item.amountKsh },
-                  afterJson: { status: CommissionStatus.PAID, paidAt: now.toISOString(), payoutId: payout.id, commissionAmountKsh: item.amountKsh }
-                }
-              : {
-                  ...audit,
-                  module: "FINANCE",
-                  entityType: "OrderFulfillment",
-                  entityId: item.id,
-                  action: "RIDER_FEE_PAID",
-                  beforeJson: { riderFeeKsh: item.amountKsh, riderFeePayoutId: null },
-                  afterJson: { riderFeeKsh: item.amountKsh, riderFeePayoutId: payout.id }
-                }
-          });
-        }
+        const payout = await recordPayout(tx, { row, week, mpesaCode, note, actor, now });
         return { payout, alreadyRecorded: false };
       });
     } catch (error) {
@@ -318,8 +243,191 @@ export class OperationsPayoutService {
   }
 }
 
+export type PayoutActor = { id: string; linkedEmployeeId: string | null };
+
+/**
+ * Writes one Payout for one person and marks the items in `row` paid: the
+ * existing CONFIRMED → PAID step for commissions, the payout link for rider
+ * fees, and the audit trail. Used by the manual "登记已付" and by the M-Pesa
+ * bulk results upload. The caller has locked the items and re-read the row.
+ * `amountKsh` is what was actually sent when it differs from the items' sum
+ * (a bulk line whose item dropped out after export).
+ */
+export async function recordPayout(tx: Db, input: {
+  row: PayoutRow;
+  week: PayoutWeek;
+  mpesaCode: string;
+  note: string | null;
+  actor: PayoutActor;
+  now: Date;
+  amountKsh?: number;
+  phone?: string | null;
+  source?: Record<string, unknown>;
+}) {
+  const { row, week, mpesaCode, note, actor, now } = input;
+  const payout = await tx.payout.create({
+    data: {
+      payeeType: row.payeeType === "AFFILIATE" ? PayoutPayeeType.AFFILIATE : PayoutPayeeType.RIDER,
+      payeeKey: row.payeeKey,
+      affiliateId: row.affiliateId,
+      deliveryRiderId: row.deliveryRiderId,
+      payeeName: row.name,
+      payeePhone: input.phone !== undefined ? input.phone : row.phone,
+      amountKsh: input.amountKsh ?? row.amountKsh,
+      itemCount: row.items.length,
+      mpesaCode,
+      periodStart: week.start,
+      periodEnd: week.end,
+      paidByAdminUserId: actor.id,
+      paidAt: now,
+      note
+    }
+  });
+
+  const commissionIds = row.items.filter((item) => item.kind === "COMMISSION").map((item) => item.id);
+  const feeIds = row.items.filter((item) => item.kind === "RIDER_FEE").map((item) => item.id);
+  const paymentNote = [`Weekly payout ${week.firstDay}~${week.lastDay}`, `M-Pesa ${mpesaCode}`, note].filter(Boolean).join(" · ");
+
+  if (commissionIds.length) {
+    // The existing CONFIRMED → PAID step, for every commission at once.
+    const changed = await tx.commission.updateMany({
+      where: { id: { in: commissionIds }, ...payableCommissionWhere },
+      data: { status: CommissionStatus.PAID, paidAt: now, payoutId: payout.id, note: paymentNote }
+    });
+    if (changed.count !== commissionIds.length) {
+      throw new ConflictException("A commission in this row changed while recording. Nothing was saved; refresh and try again.");
+    }
+  }
+  if (feeIds.length) {
+    const changed = await tx.orderFulfillment.updateMany({
+      where: { id: { in: feeIds }, ...unpaidRiderFeeWhere },
+      data: { riderFeePayoutId: payout.id }
+    });
+    if (changed.count !== feeIds.length) {
+      throw new ConflictException("A delivery in this row changed while recording. Nothing was saved; refresh and try again.");
+    }
+  }
+
+  const audit = {
+    actorType: ActorType.EMPLOYEE,
+    actorId: actor.linkedEmployeeId,
+    actorAdminUserId: actor.id,
+    sourceApp: SourceApp.OPERATIONS,
+    reason: paymentNote
+  };
+  await tx.auditLog.create({
+    data: {
+      ...audit,
+      module: "FINANCE",
+      entityType: "Payout",
+      entityId: payout.id,
+      action: "PAYOUT_RECORDED",
+      afterJson: {
+        payeeType: payout.payeeType,
+        payeeKey: payout.payeeKey,
+        payeeName: payout.payeeName,
+        payeePhone: payout.payeePhone,
+        amountKsh: payout.amountKsh,
+        itemCount: payout.itemCount,
+        mpesaCode: payout.mpesaCode,
+        periodStart: payout.periodStart.toISOString(),
+        periodEnd: payout.periodEnd.toISOString(),
+        commissionIds,
+        riderFeeFulfillmentIds: feeIds,
+        ...(input.source ?? {})
+      } as Prisma.InputJsonValue
+    }
+  });
+  for (const item of row.items) {
+    await tx.auditLog.create({
+      data: item.kind === "COMMISSION"
+        ? {
+            ...audit,
+            module: "AFFILIATE",
+            entityType: "Commission",
+            entityId: item.id,
+            action: "COMMISSION_RECORD_PAYMENT",
+            beforeJson: { status: CommissionStatus.CONFIRMED, paidAt: null, payoutId: null, commissionAmountKsh: item.amountKsh },
+            afterJson: { status: CommissionStatus.PAID, paidAt: now.toISOString(), payoutId: payout.id, commissionAmountKsh: item.amountKsh }
+          }
+        : {
+            ...audit,
+            module: "FINANCE",
+            entityType: "OrderFulfillment",
+            entityId: item.id,
+            action: "RIDER_FEE_PAID",
+            beforeJson: { riderFeeKsh: item.amountKsh, riderFeePayoutId: null },
+            afterJson: { riderFeeKsh: item.amountKsh, riderFeePayoutId: payout.id }
+          }
+    });
+  }
+  return payout;
+}
+
+/** The bulk files exported for a week with each person's result, newest first. */
+export async function loadWeekBatches(tx: Db, week: PayoutWeek) {
+  const batches = await tx.payoutBatch.findMany({
+    where: { periodStart: week.start },
+    orderBy: { exportedAt: "desc" },
+    include: { exportedByAdminUser: { select: { name: true } } }
+  });
+  if (!batches.length) return [];
+  const lines = await tx.payoutBatchLine.findMany({
+    where: { batchId: { in: batches.map((batch) => batch.id) } },
+    orderBy: { reference: "asc" },
+    select: {
+      id: true, batchId: true, reference: true, status: true, payeeType: true, payeeKey: true, payeeName: true,
+      phone: true, amountKsh: true, mpesaCode: true, resultStatus: true, resultReason: true, resultAt: true
+    }
+  });
+  return batches.map((batch) => {
+    const own = lines.filter((line) => line.batchId === batch.id);
+    const count = (status: PayoutBatchLineStatus) => own.filter((line) => line.status === status);
+    return {
+      id: batch.id,
+      reference: batch.reference,
+      status: batch.status,
+      lineCount: batch.lineCount,
+      totalKsh: batch.totalKsh,
+      exportedAt: batch.exportedAt.toISOString(),
+      exportedByName: batch.exportedByAdminUser?.name ?? null,
+      cancelledAt: batch.cancelledAt?.toISOString() ?? null,
+      reconciledAt: batch.reconciledAt?.toISOString() ?? null,
+      counts: {
+        pending: count(PayoutBatchLineStatus.PENDING).length,
+        paid: count(PayoutBatchLineStatus.PAID).length,
+        paidKsh: sumBy(count(PayoutBatchLineStatus.PAID), (line) => line.amountKsh),
+        failed: count(PayoutBatchLineStatus.FAILED).length,
+        cancelled: count(PayoutBatchLineStatus.CANCELLED).length
+      },
+      lines: own.map((line) => ({ ...line, resultAt: line.resultAt?.toISOString() ?? null }))
+    };
+  });
+}
+
+export type PendingBatchLine = { batchId: string; batchReference: string; lineId: string; lineReference: string };
+
+/** People in an exported bulk file that is still waiting for its results, by payee key. */
+export async function pendingBatchLines(tx: Db, week: PayoutWeek): Promise<Map<string, PendingBatchLine>> {
+  const batches = await tx.payoutBatch.findMany({
+    where: { periodStart: week.start, status: PayoutBatchStatus.OPEN },
+    select: { id: true, reference: true }
+  });
+  const pending = new Map<string, PendingBatchLine>();
+  if (!batches.length) return pending;
+  const references = new Map(batches.map((batch) => [batch.id, batch.reference]));
+  const lines = await tx.payoutBatchLine.findMany({
+    where: { batchId: { in: batches.map((batch) => batch.id) }, status: PayoutBatchLineStatus.PENDING },
+    select: { id: true, batchId: true, reference: true, payeeKey: true }
+  });
+  for (const line of lines) {
+    pending.set(line.payeeKey, { batchId: line.batchId, batchReference: references.get(line.batchId) ?? "", lineId: line.id, lineReference: line.reference });
+  }
+  return pending;
+}
+
 /** CONFIRMED, unpaid, not on hold, above zero: the payout export's rule. */
-const payableCommissionWhere = {
+export const payableCommissionWhere = {
   status: CommissionStatus.CONFIRMED,
   holdReason: null,
   paidAt: null,
@@ -327,13 +435,13 @@ const payableCommissionWhere = {
   commissionAmountKsh: { gt: 0 }
 } satisfies Prisma.CommissionWhereInput;
 
-const unpaidRiderFeeWhere = {
+export const unpaidRiderFeeWhere = {
   status: FulfillmentStatus.COMPLETED,
   riderFeeKsh: { gt: 0 },
   riderFeePayoutId: null
 } satisfies Prisma.OrderFulfillmentWhereInput;
 
-function parseWeek(day?: string): PayoutWeek {
+export function parseWeek(day?: string): PayoutWeek {
   try {
     return payoutWeek(day);
   } catch (error) {
@@ -341,7 +449,7 @@ function parseWeek(day?: string): PayoutWeek {
   }
 }
 
-async function loadSheet(tx: Db, week: PayoutWeek, now: Date): Promise<{ rows: PayoutRow[]; identities: Map<string, PayeeIdentity> }> {
+export async function loadSheet(tx: Db, week: PayoutWeek, now: Date): Promise<{ rows: PayoutRow[]; identities: Map<string, PayeeIdentity> }> {
   const [commissions, fees] = await Promise.all([
     tx.commission.findMany({
       where: { ...payableCommissionWhere, confirmedAt: { gte: week.start, lt: week.end } },
@@ -395,7 +503,7 @@ async function loadSheet(tx: Db, week: PayoutWeek, now: Date): Promise<{ rows: P
   return { rows, identities };
 }
 
-async function lockItems(tx: Db, row: PayoutRow) {
+export async function lockItems(tx: Db, row: Pick<PayoutRow, "items">) {
   const commissionIds = row.items.filter((item) => item.kind === "COMMISSION").map((item) => item.id);
   const feeIds = row.items.filter((item) => item.kind === "RIDER_FEE").map((item) => item.id);
   // Commissions are locked through their order, the lock after-sales and
@@ -408,7 +516,7 @@ async function lockItems(tx: Db, row: PayoutRow) {
   }
 }
 
-async function loadPayer(tx: Db, adminUserId: string): Promise<Payer> {
+export async function loadPayer(tx: Db, adminUserId: string): Promise<Payer> {
   const admin = await tx.adminUser.findUnique({
     where: { id: adminUserId },
     select: {
