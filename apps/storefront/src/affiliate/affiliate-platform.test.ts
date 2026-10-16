@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AFFILIATE_LEVELS,
   affiliateConversionRate,
+  affiliateEarningTotals,
   affiliateLevelLabel,
   buildAffiliatePath,
   collectionPublicationIssue,
@@ -57,4 +58,15 @@ test("flow 10: analytics conversion is stable and safe with no clicks", () => {
   assert.equal(affiliateConversionRate(2, 0), 0);
   assert.equal(normalizeTrackingSource(" TikTok Ads! "), "tiktokads");
   assert.equal(normalizeTrackingValue("link in bio"), "linkinbio");
+});
+
+test("dashboard sales count only orders that earned commission, so the rate reads 25%", () => {
+  const totals = affiliateEarningTotals([
+    { status: "PENDING", orderSubtotalKsh: 1000, commissionAmountKsh: 250 },
+    { status: "CONFIRMED", orderSubtotalKsh: 2000, commissionAmountKsh: 500 },
+    { status: "PAID", orderSubtotalKsh: 400, commissionAmountKsh: 100 },
+    { status: "REJECTED", orderSubtotalKsh: 5000, commissionAmountKsh: 1250 },
+  ]);
+  assert.deepEqual(totals, { orders: 3, sales: 3400, commission: 850 });
+  assert.equal(totals.commission / totals.sales, 0.25);
 });
