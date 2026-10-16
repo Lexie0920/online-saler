@@ -15,6 +15,7 @@ import type { CustomerSession } from "../auth/customer-auth";
 import {
   COLLECTION_MAX_ITEMS,
   affiliateConversionRate,
+  affiliateEarningTotals,
   buildAffiliatePath,
   collectionPublicationIssue,
   normalizeTrackingSource,
@@ -310,7 +311,7 @@ export async function updateAffiliateCampaignStatus(
 
 export async function getAffiliateDashboard(session: CustomerSession | null) {
   const affiliate = await requireActiveAffiliate(session);
-  const [clicks, orders, commissions, collections, campaigns, payouts] = await Promise.all([
+  const [clicks, commissions, collections, campaigns, payouts] = await Promise.all([
     prisma.affiliateClick.findMany({
       where: { affiliateId: affiliate.id },
       select: {
@@ -322,8 +323,10 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       take: 1000,
       orderBy: { clickedAt: "desc" },
     }),
-    prisma.order.findMany({ where: { affiliateId: affiliate.id }, select: { id: true, itemSubtotalKsh: true } }),
-    prisma.commission.findMany({ where: { affiliateId: affiliate.id }, select: { status: true, commissionAmountKsh: true } }),
+    prisma.commission.findMany({
+      where: { affiliateId: affiliate.id },
+      select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true },
+    }),
     prisma.collection.count({ where: { affiliateId: affiliate.id } }),
     prisma.campaign.count({ where: { affiliateId: affiliate.id } }),
     // Weekly M-Pesa payouts recorded by finance (2026-10-14): what reached this promoter.
@@ -346,15 +349,16 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     status,
     commissions.filter((row) => row.status === status).reduce((total, row) => total + row.commissionAmountKsh, 0),
   ]));
+  const earned = affiliateEarningTotals(commissions);
   return {
     affiliate,
     metrics: {
       clicks: clicks.filter((click) => click.productId || click.collectionId).length,
       views: clicks.length,
-      orders: orders.length,
-      sales: orders.reduce((total, order) => total + order.itemSubtotalKsh, 0),
-      commission: commissions.reduce((total, row) => total + row.commissionAmountKsh, 0),
-      conversionRate: affiliateConversionRate(orders.length, clicks.length),
+      orders: earned.orders,
+      sales: earned.sales,
+      commission: earned.commission,
+      conversionRate: affiliateConversionRate(earned.orders, clicks.length),
       topCollection: topCollection?.label ?? null,
       topProduct: topProduct?.label ?? null,
       collections,

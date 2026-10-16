@@ -64,6 +64,24 @@ export function affiliateConversionRate(orders: number, clicks: number): number 
   return Math.round((orders / clicks) * 10_000) / 100;
 }
 
+/**
+ * Orders, sales and commission on the promoter dashboard all come from the same
+ * commission rows, so commission / sales reads as the real rate (25%). Sales used
+ * to add up every attributed order, including unpaid, cancelled and expired ones
+ * that never earn commission, which made the rate look like ~17%. Rejected
+ * commissions earn nothing and count in none of the three.
+ */
+export function affiliateEarningTotals(
+  commissions: Array<{ status: string; orderSubtotalKsh: number; commissionAmountKsh: number }>,
+): { orders: number; sales: number; commission: number } {
+  const earning = commissions.filter((row) => row.status !== "REJECTED");
+  return {
+    orders: earning.length,
+    sales: earning.reduce((total, row) => total + row.orderSubtotalKsh, 0),
+    commission: earning.reduce((total, row) => total + row.commissionAmountKsh, 0),
+  };
+}
+
 export function affiliateLevelLabel(level: string): string {
   const match = /^LEVEL_([123])$/.exec(level);
   return match ? `Level ${match[1]}` : "Level 1";
