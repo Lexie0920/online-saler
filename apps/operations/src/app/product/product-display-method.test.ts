@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { setOperationsRuntimeLocale } from "@/i18n/runtime";
-import { displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob } from "./product-display-method";
+import { displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob, stillGenerating } from "./product-display-method";
 
 const job = (overrides: Record<string, unknown>) => ({
   id: "job",
@@ -67,5 +67,15 @@ assert.equal(latestFailedDisplayJob(comparison(null, [job({ id: "old", status: "
 
 assert.equal(isRejected({ status: "ARCHIVED" }), true);
 assert.equal(isRejected({ status: "CALIBRATED" }), false);
+
+// The review page stops reloading once nothing is left to wait for.
+const readyDetails = { status: "CALIBRATED", detailSourceVersion: 2, detailProfiles: [{ status: "READY", sourceDataVersion: 2 }] };
+assert.equal(stillGenerating(readyDetails, comparison("img", [])), false);
+assert.equal(stillGenerating(readyDetails, comparison(null, [job({ status: "RUNNING" })])), true);
+assert.equal(stillGenerating(readyDetails, comparison(null, [job({ status: "FAILED" })])), false);
+assert.equal(stillGenerating(readyDetails, undefined), true);
+assert.equal(stillGenerating({ ...readyDetails, detailProfiles: [{ status: "GENERATING", sourceDataVersion: 2 }] }, comparison("img", [])), true);
+assert.equal(stillGenerating({ ...readyDetails, detailProfiles: [{ status: "FAILED", sourceDataVersion: 2 }] }, comparison("img", [])), false);
+assert.equal(stillGenerating({ ...readyDetails, status: "ARCHIVED" }, comparison(null, [job({ status: "RUNNING" })])), false);
 
 console.log("product display method ok");
