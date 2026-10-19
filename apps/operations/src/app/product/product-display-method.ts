@@ -45,6 +45,23 @@ export function latestFailedDisplayJob(
   return latest?.status === "FAILED" ? latest : null;
 }
 
+/**
+ * Whether the review page should keep reloading for this item: its display
+ * image or sales details are still on their way. A failed generation only
+ * comes back on an employee retry, so polling for it just loads the API.
+ */
+export function stillGenerating(
+  product: { status: string; detailSourceVersion?: number; detailProfiles?: Array<{ status: string; sourceDataVersion: number }> },
+  comparison?: Pick<ProductImageComparisonResponse, "aiDisplayMain" | "jobs" | "original"> | null
+): boolean {
+  if (product.status === "PUBLISHED" || isRejected(product)) return false;
+  const displayWaiting = !comparison || (!comparison.aiDisplayMain && !latestFailedDisplayJob(comparison));
+  const profile = product.detailProfiles?.[0];
+  const detailReady = Boolean(profile && profile.sourceDataVersion === product.detailSourceVersion && ["READY", "APPROVED"].includes(profile.status));
+  const detailWaiting = !detailReady && profile?.status !== "FAILED";
+  return displayWaiting || detailWaiting;
+}
+
 /** Rejected on the review page (archived): listed, but out of the rest of the batch. */
 export function isRejected(product: { status: string }): boolean {
   return product.status === "ARCHIVED";

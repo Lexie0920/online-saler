@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_LABEL_SIZE, MACOS_PRINT_AGENT_DOWNLOAD_URL, PRINT_AGENT_DOWNLOAD_URL } from "../local-label-print";
 import { ProductLabelPrinter } from "./product-label-printer";
 import { productStatusLabel } from "./product-factory-display";
-import { displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob } from "./product-display-method";
+import { displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob, stillGenerating } from "./product-display-method";
 import { t } from "@/i18n/runtime";
 
 const API_PROXY_URL = "/api-proxy";
@@ -99,6 +99,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(translateApiError(message));
   }
   return body as T;
+}
+
+function usePageVisible() {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState !== "hidden");
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  return visible;
 }
 
 function useOperationIds() {
@@ -179,13 +190,17 @@ export function ProductBatchBarcodePage({ batchId, reviewMode = false }: { batch
     product.status === "PUBLISHED" || detailReady(product)
   );
 
+  // Reload only while something is still generating and the tab is in view;
+  // a failed item waits for its retry button instead of a reload every 3 s.
+  const pageVisible = usePageVisible();
+  const anyStillGenerating = activeProducts.some((product) => stillGenerating(product, comparisons[product.id]));
   useEffect(() => {
-    if (!batch || busy || (allAiDisplaysReady && allDetailsReady) || activeProducts.every((product) => product.status === "PUBLISHED")) return;
+    if (!batch || busy || !pageVisible || !anyStillGenerating) return;
     const timer = window.setTimeout(() => {
       void load().catch(() => undefined);
     }, 3_000);
     return () => window.clearTimeout(timer);
-  }, [activeProducts, allAiDisplaysReady, allDetailsReady, batch, busy, load]);
+  }, [anyStillGenerating, batch, busy, load, pageVisible]);
 
   async function generateBarcodesAndLocations() {
     if (!batch || !allDisplaysConfirmed || !allDetailsReady) return;

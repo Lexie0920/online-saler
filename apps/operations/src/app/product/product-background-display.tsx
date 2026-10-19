@@ -78,10 +78,11 @@ export function BatchDisplayProgress({ batch }: { batch: Batch }) {
           if (!response.ok) throw new Error(t("进度暂不可用"));
           return response.json() as Promise<ProductImageComparisonResponse>;
         }));
-        if (!stopped) setProgress({
-          ready: comparisons.filter((comparison) => comparison.aiDisplayMain).length,
-          failed: comparisons.filter((comparison) => !comparison.aiDisplayMain && comparison.jobs.find((job) => job.sourceImageId === comparison.original?.imageId && job.operation === "GENERATE_AI_DISPLAY_MAIN_IMAGE")?.status === "FAILED").length
-        });
+        const ready = comparisons.filter((comparison) => comparison.aiDisplayMain).length;
+        const failed = comparisons.filter((comparison) => !comparison.aiDisplayMain && comparison.jobs.find((job) => job.sourceImageId === comparison.original?.imageId && job.operation === "GENERATE_AI_DISPLAY_MAIN_IMAGE")?.status === "FAILED").length;
+        if (!stopped) setProgress({ ready, failed });
+        // Every item has an image or a failure that waits for a manual retry.
+        if (ready + failed >= batch.products.length) return;
       } catch { if (!stopped) setProgress(null); }
       if (!stopped) timer = setTimeout(poll, 5_000);
     }
