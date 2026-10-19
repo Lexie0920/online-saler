@@ -10,7 +10,7 @@ verified by these tests. The September 14 fidelity update follows an employee-re
 | --- | --- | --- |
 | Clothing information recognition (sizes entered manually) | `gpt-4o-mini` | `OPENAI_VISION_MODEL` |
 | Copy from employee-confirmed facts | `gpt-4o-mini` | `OPENAI_DETAIL_MODEL` |
-| Required catalog display image | `gpt-image-2.5-sunburst`, `high`, 1024 square | `OPENAI_IMAGE_EDIT_MODEL`, `OPENAI_IMAGE_EDIT_QUALITY` |
+| Required catalog display image | `gpt-image-2.5-sunburst`, `medium` (staging, since 2026-10-19), 1024 square | `OPENAI_IMAGE_EDIT_MODEL`, `OPENAI_IMAGE_EDIT_QUALITY` |
 
 `OPENAI_API_KEY` is read from the Secret Manager secret `STAGING_OPENAI_API_KEY`,
 not from a plaintext Cloud Run environment variable. The runtime service account
@@ -102,6 +102,17 @@ this again:
   2.5 Sunburst bills as tokens across three line items, not per image, so it does
   not appear in the per-image counter. Read the `Group by -> Line Item` breakdown
   instead; the zero is a counter that does not apply, not an absence of spend.
+
+## Display image quality lowered to medium — 2026-10-19
+
+The first USD 78 of credit ran out on 2026-10-19. At published rates (USD 30 per
+million image-output tokens, roughly 1,756 output tokens at `high` and 439 at
+`medium` for 1024 square) the output part drops from about USD 0.053 to USD 0.013
+per image. Input (photo plus prompt, about USD 0.018) does not depend on quality,
+so the estimate is about USD 0.031 per image instead of USD 0.071. The user chose
+`medium`; the staging workflow now deploys `OPENAI_IMAGE_EDIT_QUALITY=medium`.
+Check print and shape fidelity on the next batch, and reconcile the estimate with
+the OpenAI usage page. Set the variable back to `high` to revert.
 
 ## Avoiding routine deployment charges
 
