@@ -66,3 +66,10 @@ export function stillGenerating(
 export function isRejected(product: { status: string }): boolean {
   return product.status === "ARCHIVED";
 }
+
+/** The current sales details for this item failed and wait for a retry or a reject. */
+export function detailFailed(product: { status: string; detailSourceVersion?: number; detailProfiles?: Array<{ status: string; sourceDataVersion: number }> }): boolean {
+  if (isRejected(product)) return false;
+  const profile = product.detailProfiles?.[0];
+  return Boolean(profile && profile.sourceDataVersion === product.detailSourceVersion && profile.status === "FAILED");
+}

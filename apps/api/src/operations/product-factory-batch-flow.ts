@@ -30,6 +30,7 @@ export type ProductFactoryBatchNextAction =
 
 export type BatchFlowProduct = {
   status: string;
+  batchItemNumber?: number | null;
   category?: string | null;
   subcategory?: string | null;
   detailSourceVersion?: number | null;
@@ -55,6 +56,8 @@ export type ProductFactoryDetailProgress = {
   generatingCount: number;
   readyCount: number;
   failedCount: number;
+  // Which items failed, so staff can find them; rejected (archived) items no longer count.
+  failedItemNumbers: number[];
   outdatedCount: number;
   approvedCount: number;
   readyForPublish: boolean;
@@ -142,12 +145,17 @@ export function summarizeProductFactoryDetailProgress(
   const currentStatuses = eligible.map((product) => currentDetailProfile(product)?.status ?? null);
   const count = (status: string) => currentStatuses.filter((value) => value === status).length;
   const approvedCount = count("APPROVED");
+  const failedItemNumbers = eligible
+    .filter((product) => product.status !== "ARCHIVED" && currentDetailProfile(product)?.status === "FAILED")
+    .map((product) => product.batchItemNumber ?? 0)
+    .sort((left, right) => left - right);
   return {
     eligibleCount: eligible.length,
     pendingCount: currentStatuses.filter((status) => status === null || status === "PENDING").length,
     generatingCount: count("GENERATING"),
     readyCount: count("READY"),
-    failedCount: count("FAILED"),
+    failedCount: failedItemNumbers.length,
+    failedItemNumbers,
     outdatedCount: count("OUTDATED"),
     approvedCount,
     readyForPublish: products.length > 0

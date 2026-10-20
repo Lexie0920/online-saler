@@ -106,3 +106,14 @@ test("calculates the Nairobi business day independently of server timezone", () 
   const now = new Date("2026-08-01T22:30:00.000Z");
   assert.equal(startOfDayAtUtcOffset(now, 180).toISOString(), "2026-08-01T21:00:00.000Z");
 });
+
+test("names the items whose sales details failed, leaving rejected items out", () => {
+  const progress = summarizeProductFactoryDetailProgress([
+    { status: "CALIBRATED", batchItemNumber: 7, detailSourceVersion: 1, detailProfiles: [{ status: "FAILED", sourceDataVersion: 1 }] },
+    { status: "CALIBRATED", batchItemNumber: 2, detailSourceVersion: 1, detailProfiles: [{ status: "READY", sourceDataVersion: 1 }] },
+    { status: "ARCHIVED", batchItemNumber: 3, detailSourceVersion: 1, detailProfiles: [{ status: "FAILED", sourceDataVersion: 1 }] },
+    { status: "CALIBRATED", batchItemNumber: 4, detailSourceVersion: 2, detailProfiles: [{ status: "FAILED", sourceDataVersion: 1 }] }
+  ]);
+  assert.equal(progress.failedCount, 1);
+  assert.deepEqual(progress.failedItemNumbers, [7]);
+});

@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_LABEL_SIZE, MACOS_PRINT_AGENT_DOWNLOAD_URL, PRINT_AGENT_DOWNLOAD_URL } from "../local-label-print";
 import { ProductLabelPrinter } from "./product-label-printer";
 import { productStatusLabel } from "./product-factory-display";
-import { displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob, stillGenerating } from "./product-display-method";
+import { detailFailed, displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob, stillGenerating } from "./product-display-method";
 import { t } from "@/i18n/runtime";
 
 const API_PROXY_URL = "/api-proxy";
@@ -189,6 +189,10 @@ export function ProductBatchBarcodePage({ batchId, reviewMode = false }: { batch
   const allDetailsReady = activeProducts.length > 0 && activeProducts.every((product) =>
     product.status === "PUBLISHED" || detailReady(product)
   );
+
+  // Failed sales details block the batch until each is retried or rejected, so they are named.
+  const detailFailedProducts = useMemo(() => activeProducts.filter((product) => product.status !== "PUBLISHED" && detailFailed(product)), [activeProducts]);
+  const failedNumbers = detailFailedProducts.map((product) => product.batchItemNumber ?? "-").join("、");
 
   // Reload only while something is still generating and the tab is in view;
   // a failed item waits for its retry button instead of a reload every 3 s.
@@ -462,9 +466,9 @@ export function ProductBatchBarcodePage({ batchId, reviewMode = false }: { batch
         <Button disabled={Boolean(busy)} variant="outline" onClick={() => void load().catch((caught) => setError(errorMessage(caught, t("刷新失败"))))}>{t("刷新进度")}</Button>
       </div>
       <nav className="flex flex-wrap gap-2" aria-label={t("选择待审核商品")}>
-        {batch.products.map((item, index) => <Button key={item.id} variant={index === reviewIndex ? "default" : "outline"} disabled={Boolean(busy)} onClick={() => setReviewIndex(index)}>
+        {batch.products.map((item, index) => <Button key={item.id} variant={index === reviewIndex ? "default" : "outline"} className={cn(detailFailed(item) && index !== reviewIndex && "border-destructive text-destructive")} disabled={Boolean(busy)} onClick={() => setReviewIndex(index)}>
           
-          {t("第")} {item.batchItemNumber ?? index + 1}  {t("件")}{isRejected(item) ? t(" · 已拒绝") : item.status === "PUBLISHED" || displayConfirmed(comparisons[item.id]) ? t(" · 已确认") : t(" · 待审核")}
+          {t("第")} {item.batchItemNumber ?? index + 1}  {t("件")}{isRejected(item) ? t(" · 已拒绝") : detailFailed(item) ? t(" · 详情生成失败") : item.status === "PUBLISHED" || displayConfirmed(comparisons[item.id]) ? t(" · 已确认") : t(" · 待审核")}
         </Button>)}
       </nav>
       {product ? <section className="rounded-md border p-4">
@@ -496,18 +500,25 @@ export function ProductBatchBarcodePage({ batchId, reviewMode = false }: { batch
               {busy === `reject-${product.id}` ? <LoaderCircleIcon className="animate-spin" /> : <XCircleIcon />}{t("单独拒绝这件")}
             </Button> : null}
           </div>
+          {detailFailed(product) ? <div className="mt-4"><StatusMessage tone="danger">
+            {t("这件的 AI 销售详情（文案和尺码模板）生成失败。")}
+            <span className="mt-1 block">{t("可以点“重试未完成生成”；还是失败就“单独拒绝这件”，本批其余衣服照常继续。")}</span>
+          </StatusMessage></div> : null}
           {!detailReady(product) || !comparison?.aiDisplayMain ? <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-            <span>{t("未完成的展示图或销售详情正在后台处理，完成后自动更新；已有图片可以先审核。")}</span>
+            {detailFailed(product) && comparison?.aiDisplayMain ? null : <span>{t("未完成的展示图或销售详情正在后台处理，完成后自动更新；已有图片可以先审核。")}</span>}
             <Button variant="outline" disabled={Boolean(busy)} onClick={() => void rerunDetails()}>{t("重试未完成生成")}</Button>
           </div> : null}
         </>}
       </section> : null}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-4">
         <p className="text-sm">
-          {allDisplaysConfirmed ? (allDetailsReady ? t("全部展示图已确认，可以继续。") : t("展示图已全部确认，销售详情仍在后台生成。")) : t("还有 {v0} 件展示图待确认。", { v0: batch.targetCount - confirmedCount })}
+          {allDisplaysConfirmed ? (allDetailsReady ? t("全部展示图已确认，可以继续。") : detailFailedProducts.length ? <span className="text-destructive">{t("第 {numbers} 件的销售详情生成失败：重试，或单独拒绝这件，其余衣服就能继续。", { numbers: failedNumbers })}</span> : t("展示图已全部确认，销售详情仍在后台生成。")) : t("还有 {v0} 件展示图待确认。", { v0: batch.targetCount - confirmedCount })}
           {rejectedCount > 0 ? <span className="ml-1 text-muted-foreground">{t("（{count} 件已单独拒绝，不再处理）", { count: rejectedCount })}</span> : null}
         </p>
         <div className="flex flex-wrap items-end gap-3">
+          {detailFailedProducts.length ? <Button variant="outline" className="text-destructive" disabled={Boolean(busy)} onClick={() => setReviewIndex(batch.products.indexOf(detailFailedProducts[0]!))}>
+            <AlertTriangleIcon />{t("查看第 {number} 件", { number: detailFailedProducts[0]!.batchItemNumber ?? "-" })}
+          </Button> : null}
           {!allLocationsReady ? <ShelfPicker shelves={shelves} value={shelfId} needed={activeCount - locationCount} onChange={setShelfId} /> : null}
           <Button disabled={Boolean(busy) || !allDisplaysConfirmed || !allDetailsReady || (!allLocationsReady && !shelfId)} onClick={() => void generateBarcodesAndLocations()}>{t("继续：生成标签、打印入仓")}</Button>
         </div>
