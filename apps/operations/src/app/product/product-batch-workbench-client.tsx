@@ -96,6 +96,7 @@ type ProductBatch = {
     generatingCount: number;
     readyCount: number;
     failedCount: number;
+    failedItemNumbers?: number[];
     outdatedCount: number;
     approvedCount: number;
     readyForPublish: boolean;
@@ -648,6 +649,16 @@ export function ProductBatchDetailPage({ batchId }: { batchId: string }) {
             <Metric title={t("已过期")} value={batch.detailGeneration.outdatedCount} tone={batch.detailGeneration.outdatedCount ? "danger" : "default"} />
             <Metric title={t("已批准")} value={batch.detailGeneration.approvedCount} suffix={`/ ${batch.targetCount}`} />
             <Metric title={t("已进入详情")} value={batch.detailGeneration.eligibleCount} suffix={`/ ${batch.targetCount}`} />
+            {batch.detailGeneration.failedItemNumbers?.length ? (
+              <div className="col-span-full flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                <span className="text-destructive">
+                  {t("生成失败的是：第 {numbers} 件。可以重试，或单独拒绝这件，本批其余衣服照常继续。", { numbers: batch.detailGeneration.failedItemNumbers.join("、") })}
+                </span>
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/product/display-review?batchId=${encodeURIComponent(batch.id)}`}>{t("去处理")}<ArrowRightIcon data-icon="inline-end" /></Link>
+                </Button>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}

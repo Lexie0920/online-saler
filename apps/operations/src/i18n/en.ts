@@ -3190,4 +3190,11 @@ export const enDictionary: Record<string, string> = {
   "已对账": "Reconciled",
   "每人一行。点「展开」看包含哪些订单。平时用上面的 M-Pesa 批量付款；单独手动转账的，转账后点「登记已付」。": "One row per person. Use Show to see the orders in it. Normally pay with the M-Pesa bulk payment above; for a one-off hand transfer, use Record payment after sending.",
   "不是有效的 M-Pesa 手机号，不能放进批量文件": "Not a valid M-Pesa phone number; cannot go into the bulk file",
+  "生成失败的是：第 {numbers} 件。可以重试，或单独拒绝这件，本批其余衣服照常继续。": "Failed: item {numbers}. Retry it, or reject just that item and the rest of the batch carries on.",
+  "去处理": "Fix it",
+  " · 详情生成失败": " · details failed",
+  "这件的 AI 销售详情（文案和尺码模板）生成失败。": "The AI sales details (copy and size template) for this item failed to generate.",
+  "可以点“重试未完成生成”；还是失败就“单独拒绝这件”，本批其余衣服照常继续。": "Use Retry the unfinished generation; if it still fails, use Reject just this item and the rest of the batch carries on.",
+  "第 {numbers} 件的销售详情生成失败：重试，或单独拒绝这件，其余衣服就能继续。": "Sales details failed for item {numbers}: retry, or reject just that item so the rest can continue.",
+  "查看第 {number} 件": "Show item {number}",
 };

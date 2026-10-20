@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { setOperationsRuntimeLocale } from "@/i18n/runtime";
-import { displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob, stillGenerating } from "./product-display-method";
+import { detailFailed, displayMethod, displayMethodLabel, isRejected, latestFailedDisplayJob, stillGenerating } from "./product-display-method";
 
 const job = (overrides: Record<string, unknown>) => ({
   id: "job",
@@ -77,5 +77,11 @@ assert.equal(stillGenerating(readyDetails, undefined), true);
 assert.equal(stillGenerating({ ...readyDetails, detailProfiles: [{ status: "GENERATING", sourceDataVersion: 2 }] }, comparison("img", [])), true);
 assert.equal(stillGenerating({ ...readyDetails, detailProfiles: [{ status: "FAILED", sourceDataVersion: 2 }] }, comparison("img", [])), false);
 assert.equal(stillGenerating({ ...readyDetails, status: "ARCHIVED" }, comparison(null, [job({ status: "RUNNING" })])), false);
+
+// A failed sales detail is named on the review page until it is retried or the item rejected.
+assert.equal(detailFailed({ ...readyDetails, detailProfiles: [{ status: "FAILED", sourceDataVersion: 2 }] }), true);
+assert.equal(detailFailed({ ...readyDetails, detailProfiles: [{ status: "FAILED", sourceDataVersion: 1 }] }), false);
+assert.equal(detailFailed({ ...readyDetails, status: "ARCHIVED", detailProfiles: [{ status: "FAILED", sourceDataVersion: 2 }] }), false);
+assert.equal(detailFailed(readyDetails), false);
 
 console.log("product display method ok");
