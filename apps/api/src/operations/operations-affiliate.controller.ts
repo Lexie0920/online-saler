@@ -113,8 +113,8 @@ export class OperationsAffiliateController {
   }
 
   @Get("payout-export")
-  async payoutExport(@Headers("authorization") authorization?: string) {
-    return this.affiliate.payoutExport(await this.access.requireAccessToken(authorization));
+  async payoutExport(@Headers("authorization") authorization?: string, @Query("from") from?: string, @Query("to") to?: string) {
+    return this.affiliate.payoutExport(await this.access.requireAccessToken(authorization), { from, to });
   }
 
   @Get("commission-setting")

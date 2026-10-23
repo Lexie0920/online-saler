@@ -117,10 +117,15 @@ test("payout export excludes historical confirmations with unresolved after-sale
     { ...h.record(), id: "undelivered", affiliate: { affiliateCode: "AFF", displayName: "Affiliate", phone: null }, order: { ...h.order, orderNumber: "ORDER-3", fulfillment: null } }
   ];
   const originalFindMany = prisma.commission.findMany;
-  prisma.commission.findMany = (async () => rows) as unknown as typeof prisma.commission.findMany;
+  let queried: { where?: { confirmedAt?: { gte?: Date; lt?: Date } } } = {};
+  prisma.commission.findMany = (async (args: typeof queried) => { queried = args; return rows; }) as unknown as typeof prisma.commission.findMany;
   t.after(() => { prisma.commission.findMany = originalFindMany; });
   const access = { requirePermission: async (_actor: string, permission: string) => { assert.equal(permission, "action.affiliate.export"); } } as unknown as OperationsAccessService;
   const exported = await new OperationsAffiliateService(access).payoutExport("admin-1");
+  assert.equal(queried.where?.confirmedAt, undefined, "without dates, everything waiting to be paid is exported");
+  await new OperationsAffiliateService(access).payoutExport("admin-1", { from: "2026-10-01", to: "2026-10-07" });
+  assert.equal(queried.where?.confirmedAt?.gte?.toISOString(), "2026-09-30T21:00:00.000Z");
+  assert.equal(queried.where?.confirmedAt?.lt?.toISOString(), "2026-10-07T21:00:00.000Z");
   assert.deepEqual(exported.map((row) => row.commissionId), ["eligible"]);
   // 推广员自己没有电话时，导出使用绑定顾客账号的电话。
   assert.equal(exported[0]?.phone, "254700000001");

@@ -30,8 +30,14 @@ export function toCsv(rows: Array<Record<string, unknown>>): string {
   ].join("\n");
 }
 
-/** `payout-list-2026-10-23.csv`, dated in Nairobi time because the payout week is. */
-export function payoutListFileName(now: Date = new Date()): string {
+/**
+ * `payout-list-2026-10-23.csv`, dated in Nairobi time because the payout week is.
+ * With a chosen range the name says which days it covers, e.g. `payout-list-2026-10-01_to_2026-10-07.csv`.
+ */
+export function payoutListFileName(now: Date = new Date(), range: { from?: string; to?: string } = {}): string {
+  if (range.from || range.to) {
+    return `payout-list-${range.from || "start"}_to_${range.to || "latest"}.csv`;
+  }
   const day = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Africa/Nairobi",
     year: "numeric",

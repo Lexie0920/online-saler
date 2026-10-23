@@ -14,6 +14,8 @@ import { LAUNCH_AFFILIATE_COMMISSION_RATE_BPS } from "@online-saler/business-rul
 import { randomBytes } from "node:crypto";
 import { OperationsAccessService } from "./operations-access.service";
 import { commissionEligibility } from "./operations-commission-policy";
+import { exportRange } from "./operations-affiliate-export-range";
+import { nairobiDay } from "./operations-payout-sheet";
 
 const AFFILIATE_VIEW = "action.affiliate.view";
 const AFFILIATE_EDIT = "action.affiliate.edit";
@@ -476,10 +478,15 @@ export class OperationsAffiliateService {
     });
   }
 
-  async payoutExport(adminUserId?: string) {
+  async payoutExport(adminUserId?: string, range: { from?: string; to?: string } = {}) {
     await this.access.requirePermission(adminUserId, AFFILIATE_EXPORT);
+    const confirmed = exportRange(range.from, range.to);
     const commissions = await prisma.commission.findMany({
-      where: { status: CommissionStatus.CONFIRMED, holdReason: null },
+      where: {
+        status: CommissionStatus.CONFIRMED,
+        holdReason: null,
+        ...(confirmed.gte || confirmed.lt ? { confirmedAt: confirmed } : {})
+      },
       include: {
         // 推广员本身没填电话时，退回到绑定的顾客账号电话（和 Weekly payouts 一致）。
         affiliate: { include: { customer: { select: { phone: true } } } },
@@ -494,6 +501,7 @@ export class OperationsAffiliateService {
       affiliateName: commission.affiliate.displayName,
       phone: commission.affiliate.phone || commission.affiliate.customer?.phone || null,
       orderNumber: commission.order.orderNumber,
+      confirmedDate: commission.confirmedAt ? nairobiDay(commission.confirmedAt) : null,
       orderSubtotalKsh: commission.orderSubtotalKsh,
       rateBps: commission.rateBps,
       commissionAmountKsh: commission.commissionAmountKsh

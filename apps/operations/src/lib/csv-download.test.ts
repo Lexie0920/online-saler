@@ -49,3 +49,9 @@ test("the file name carries the Nairobi date, not the UTC one", () => {
   assert.equal(payoutListFileName(new Date("2026-10-22T22:30:00Z")), "payout-list-2026-10-23.csv");
   assert.equal(payoutListFileName(new Date("2026-10-23T09:00:00Z")), "payout-list-2026-10-23.csv");
 });
+
+test("a chosen range is written into the file name", () => {
+  assert.equal(payoutListFileName(new Date(), { from: "2026-10-01", to: "2026-10-07" }), "payout-list-2026-10-01_to_2026-10-07.csv");
+  assert.equal(payoutListFileName(new Date(), { from: "2026-10-01" }), "payout-list-2026-10-01_to_latest.csv");
+  assert.equal(payoutListFileName(new Date(), { to: "2026-10-07" }), "payout-list-start_to_2026-10-07.csv");
+});

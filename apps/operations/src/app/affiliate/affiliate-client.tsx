@@ -259,6 +259,9 @@ export function AffiliateCenterPage({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFrom, setExportFrom] = useState("");
+  const [exportTo, setExportTo] = useState("");
   const meta = pageMeta(view, commissionQueue);
 
   const load = useCallback(async () => {
@@ -407,13 +410,20 @@ export function AffiliateCenterPage({
     if (!adminUserId) return;
     setError("");
     setMessage("");
+    if (exportFrom && exportTo && exportFrom > exportTo) {
+      setError(t("开始日期不能晚于结束日期。"));
+      return;
+    }
     try {
-      const rows = await request<Array<Record<string, unknown>>>("/operations/affiliate/payout-export", { query: { adminUserId } });
+      const rows = await request<Array<Record<string, unknown>>>("/operations/affiliate/payout-export", {
+        query: { adminUserId, from: exportFrom || undefined, to: exportTo || undefined }
+      });
       if (rows.length === 0) {
         setMessage(t("目前没有待付款的佣金，没有生成文件。"));
         return;
       }
-      downloadCsv(payoutListFileName(), toCsv(rows));
+      downloadCsv(payoutListFileName(new Date(), { from: exportFrom, to: exportTo }), toCsv(rows));
+      setExportOpen(false);
       setMessage(t("付款清单已下载：{count} 笔。", { count: rows.length }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("导出付款清单失败。"));
@@ -460,7 +470,7 @@ export function AffiliateCenterPage({
         action={
           <div className="flex gap-2">
             {canExport ? (
-              <Button variant="outline" onClick={() => void exportPayouts()}>
+              <Button variant="outline" onClick={() => setExportOpen((open) => !open)}>
                 
                 {t("导出付款清单")}
               </Button>
@@ -479,6 +489,26 @@ export function AffiliateCenterPage({
           <Metric key={metric.label} title={metric.label} value={metric.value} />
         ))}
       </section>
+
+      {canExport && exportOpen ? (
+        <Card>
+          <CardContent className="flex flex-col gap-3 pt-4">
+            <p className="text-sm text-muted-foreground">{t("按佣金确认的日期筛选，两个日期都不选就导出全部待付款的佣金。")}</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-1 text-sm">
+                {t("开始日期")}
+                <Input type="date" className="w-44" value={exportFrom} max={exportTo || undefined} onChange={(event) => setExportFrom(event.target.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                {t("结束日期")}
+                <Input type="date" className="w-44" value={exportTo} min={exportFrom || undefined} onChange={(event) => setExportTo(event.target.value)} />
+              </label>
+              <Button onClick={() => void exportPayouts()}>{t("下载付款清单")}</Button>
+              <Button variant="outline" onClick={() => setExportOpen(false)}>{t("取消")}</Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {message ? <StatusMessage>{message}</StatusMessage> : null}
       {error ? <StatusMessage tone="danger">{error}</StatusMessage> : null}
