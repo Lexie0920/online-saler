@@ -135,7 +135,13 @@ M-Pesa 生产密钥存放在 Google Secret Manager，**不得写入 GitHub repos
 
 - 从最新 `develop` 切 `feature/*`、`fix/*`、`docs/*` 分支，PR 目标 `develop`，保持 PR 小。
 - **不要直接 push `develop`**。push / 合并到 `develop` 会自动部署 api 和 operations，而它们和线上共用数据库，等于上线。
-- Eric 的规则（2026-10-16）：Eric 本人的会话所开 PR，CI 通过后可以直接合并，无需再问。**其他团队成员的 PR 由 Eric（CODEOWNERS）审核后合并**，除非 Eric 另行授权。
+- Eric 的规则（2026-10-16）：Eric 本人的会话所开 PR，CI 通过后可以直接合并，无需再问。
+- **其他团队成员的 PR 按改动分级（2026-10-23 起）**：
+  - 只改普通代码（页面样式、文案、普通功能、商品数字化流程、测试、文档）→ CI 通过即可自己合并。
+  - 改到 `.github/CODEOWNERS` 列出的重要路径 → 必须等 Eric 批准。重要路径包括：部署与 CI 配置、数据库 schema 与迁移、`packages/business-rules`、商城端的支付 / 下单 / 订单 / 分销 / 登录 / API 路由、作业台后端的权限 / 履约 / 售后退款 / 定金 / 佣金 / 结算打款，以及本文件。
+  - GitHub 会自动判断：PR 碰到这些路径时，合并按钮会显示需要 Code Owner 审核。
+  - 一个 PR 同时有普通改动和重要改动时，尽量拆成两个，让普通部分不被卡住。
+  - 新增文件属于上述高危业务但落在名单外的路径时，顺手在同一个 PR 里把路径加进 CODEOWNERS（这样该 PR 也需要 Eric 批准）。
 
 提交前自查（PR 模板里也有）：
 

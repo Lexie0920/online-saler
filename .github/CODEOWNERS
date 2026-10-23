@@ -1,1 +1,46 @@
-* @ericye666666-cmd
+# 分级审核：只有改到下面这些路径的 PR 才需要 Eric 批准。
+# 其他改动（页面样式、文案、普通功能、测试、文档）CI 通过即可合并。
+# 生效前提：develop / main 的 ruleset 勾选 "Require review from Code Owners"，
+# Required approvals 设为 0。详见 CLAUDE.md 第六节。
+
+# 部署、CI、云资源和权限规则本身
+/.github/                                   @ericye666666-cmd
+/Dockerfile.*                               @ericye666666-cmd
+/.dockerignore                              @ericye666666-cmd
+/infrastructure/                            @ericye666666-cmd
+/scripts/gcloud/                            @ericye666666-cmd
+/scripts/deploy-*                           @ericye666666-cmd
+/scripts/production-*                       @ericye666666-cmd
+/scripts/cleanup-staging-test-data.mjs      @ericye666666-cmd
+/scripts/staging-test-data-cleanup-lib.mjs  @ericye666666-cmd
+/CLAUDE.md                                  @ericye666666-cmd
+
+# 数据库结构和迁移（api 与线上共用数据库）
+/packages/database/                         @ericye666666-cmd
+/scripts/prepare-integration-db.mjs         @ericye666666-cmd
+
+# 业务规则：预留时长、配送费、佣金比例等
+/packages/business-rules/                   @ericye666666-cmd
+
+# 商城端：下单、支付、订单、分销、登录、定时任务
+/apps/storefront/src/payments/              @ericye666666-cmd
+/apps/storefront/src/checkout/              @ericye666666-cmd
+/apps/storefront/src/orders/                @ericye666666-cmd
+/apps/storefront/src/affiliate/             @ericye666666-cmd
+/apps/storefront/src/auth/                  @ericye666666-cmd
+/apps/storefront/src/app/api/               @ericye666666-cmd
+
+# 作业台后端：权限、履约、售后退款、定金、佣金、结算打款
+/apps/api/src/foundation/                   @ericye666666-cmd
+/apps/api/src/operations/operations-access*            @ericye666666-cmd
+/apps/api/src/operations/operations-controller-auth*   @ericye666666-cmd
+/apps/api/src/operations/operations-write-actor*       @ericye666666-cmd
+/apps/api/src/operations/*fulfillment*                 @ericye666666-cmd
+/apps/api/src/operations/operations-after-sales*       @ericye666666-cmd
+/apps/api/src/operations/operations-refund-request*    @ericye666666-cmd
+/apps/api/src/operations/*deposit*                     @ericye666666-cmd
+/apps/api/src/operations/*commission*                  @ericye666666-cmd
+/apps/api/src/operations/*payout*                      @ericye666666-cmd
+/apps/api/src/operations/mpesa-bulk-format*            @ericye666666-cmd
+/apps/api/src/operations/operations-affiliate*         @ericye666666-cmd
+/apps/api/src/integration/                  @ericye666666-cmd
