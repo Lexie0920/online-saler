@@ -13,6 +13,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { downloadCsv, payoutListFileName, toCsv } from "@/lib/csv-download";
 import { cn } from "@/lib/utils";
 import { t } from "@/i18n/runtime";
 
@@ -404,11 +405,16 @@ export function AffiliateCenterPage({
 
   async function exportPayouts() {
     if (!adminUserId) return;
+    setError("");
+    setMessage("");
     try {
       const rows = await request<Array<Record<string, unknown>>>("/operations/affiliate/payout-export", { query: { adminUserId } });
-      const csv = toCsv(rows);
-      await navigator.clipboard.writeText(csv);
-      setMessage(t("付款清单已复制到剪贴板。"));
+      if (rows.length === 0) {
+        setMessage(t("目前没有待付款的佣金，没有生成文件。"));
+        return;
+      }
+      downloadCsv(payoutListFileName(), toCsv(rows));
+      setMessage(t("付款清单已下载：{count} 笔。", { count: rows.length }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("导出付款清单失败。"));
     }
@@ -1080,18 +1086,4 @@ function rateLabel(value?: number | null): string {
 
 function dateTime(value?: string | null): string {
   return value ? new Date(value).toLocaleString("en-KE") : "-";
-}
-
-function toCsv(rows: Array<Record<string, unknown>>): string {
-  if (rows.length === 0) return "";
-  const headers = Object.keys(rows[0] ?? {});
-  return [
-    headers.join(","),
-    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(","))
-  ].join("\n");
-}
-
-function csvCell(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value);
-  return `"${text.replace(/"/g, '""')}"`;
 }
