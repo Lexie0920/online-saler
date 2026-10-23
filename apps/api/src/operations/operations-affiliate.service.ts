@@ -481,7 +481,8 @@ export class OperationsAffiliateService {
     const commissions = await prisma.commission.findMany({
       where: { status: CommissionStatus.CONFIRMED, holdReason: null },
       include: {
-        affiliate: true,
+        // 推广员本身没填电话时，退回到绑定的顾客账号电话（和 Weekly payouts 一致）。
+        affiliate: { include: { customer: { select: { phone: true } } } },
         order: { include: commissionOrderInclude }
       },
       orderBy: { createdAt: "asc" }
@@ -491,7 +492,7 @@ export class OperationsAffiliateService {
       commissionId: commission.id,
       affiliateCode: commission.affiliate.affiliateCode,
       affiliateName: commission.affiliate.displayName,
-      phone: commission.affiliate.phone,
+      phone: commission.affiliate.phone || commission.affiliate.customer?.phone || null,
       orderNumber: commission.order.orderNumber,
       orderSubtotalKsh: commission.orderSubtotalKsh,
       rateBps: commission.rateBps,

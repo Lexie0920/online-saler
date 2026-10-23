@@ -112,7 +112,7 @@ test("permission and optimistic concurrency failures leave no audit of a success
 test("payout export excludes historical confirmations with unresolved after-sales or invalid handover", async (t) => {
   const h = harness(t, "CONFIRMED");
   const rows = [
-    { ...h.record(), id: "eligible", affiliate: { affiliateCode: "AFF", displayName: "Affiliate", phone: null }, order: { ...h.order, orderNumber: "ORDER-1" } },
+    { ...h.record(), id: "eligible", affiliate: { affiliateCode: "AFF", displayName: "Affiliate", phone: null, customer: { phone: "254700000001" } }, order: { ...h.order, orderNumber: "ORDER-1" } },
     { ...h.record(), id: "returned", affiliate: { affiliateCode: "AFF", displayName: "Affiliate", phone: null }, order: { ...h.order, orderNumber: "ORDER-2", afterSaleReturns: [{ status: "REQUESTED" }] } },
     { ...h.record(), id: "undelivered", affiliate: { affiliateCode: "AFF", displayName: "Affiliate", phone: null }, order: { ...h.order, orderNumber: "ORDER-3", fulfillment: null } }
   ];
@@ -122,6 +122,8 @@ test("payout export excludes historical confirmations with unresolved after-sale
   const access = { requirePermission: async (_actor: string, permission: string) => { assert.equal(permission, "action.affiliate.export"); } } as unknown as OperationsAccessService;
   const exported = await new OperationsAffiliateService(access).payoutExport("admin-1");
   assert.deepEqual(exported.map((row) => row.commissionId), ["eligible"]);
+  // 推广员自己没有电话时，导出使用绑定顾客账号的电话。
+  assert.equal(exported[0]?.phone, "254700000001");
 });
 
 test("affiliate controller rejects unsigned requests and overrides a forged body actor", async () => {
