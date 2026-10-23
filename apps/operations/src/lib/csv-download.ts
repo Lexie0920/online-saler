@@ -41,6 +41,16 @@ export function payoutListFileName(now: Date = new Date()): string {
   return `payout-list-${day}.csv`;
 }
 
+/**
+ * How long the download link stays valid after the click.
+ *
+ * A browser set to "ask where to save each file" shows a Save dialog and only reads
+ * the file once the person confirms it. Revoking the link after one second broke
+ * that: the page said "downloaded", the dialog appeared, and the saved file never
+ * arrived. Five minutes covers a slow click; the link is released then.
+ */
+export const DOWNLOAD_LINK_LIFETIME_MS = 5 * 60 * 1000;
+
 /** Saves the CSV as a file in the browser, with the byte-order mark Excel needs. */
 export function downloadCsv(fileName: string, csv: string) {
   const url = URL.createObjectURL(new Blob([CSV_BOM, csv], { type: "text/csv;charset=utf-8" }));
@@ -51,5 +61,5 @@ export function downloadCsv(fileName: string, csv: string) {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  window.setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_LINK_LIFETIME_MS);
 }
