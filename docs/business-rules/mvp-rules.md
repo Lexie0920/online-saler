@@ -184,6 +184,12 @@ Until 2026-09-26 returns were accepted only for those five reasons and within
   themselves. Only SUPER_ADMIN and FINANCE hold `finance.payout`.
 - A commission belongs to the week it was confirmed in; a rider fee belongs to
   the week its delivery was completed with the customer's code.
+- The payment list is exported from one place only, the 导出 panel on 周结付款
+  (read-only, `GET operations/payouts/export`): a week, a date range, everything
+  unpaid, or everything unpaid from before a week; promoters and riders; unpaid,
+  paid or both; one line per person per week or one per order. Paid lines carry
+  the M-Pesa code they were paid with. It does not change any payout or
+  commission state.
 - Refunded items revoke the related commission.
 - A cancelled or written-off order reverses its commission: an unconfirmed one
   is rejected, a confirmed one is frozen with a hold reason so it cannot be

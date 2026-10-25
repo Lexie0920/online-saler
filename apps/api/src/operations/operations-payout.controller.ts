@@ -26,6 +26,27 @@ export class OperationsPayoutController {
     return this.payouts.weeklySheet({ adminUserId: await this.access.requireAccessToken(authorization), week });
   }
 
+  /**
+   * 导出: scope=week|range|all|earlier, status=pending|paid|all, include=affiliate,rider,
+   * format=summary|detail, plus week (any Nairobi date) or from/to (YYYY-MM-DD). Read-only.
+   */
+  @Get("export")
+  async exportList(
+    @Headers("authorization") authorization?: string,
+    @Query("scope") scope?: string,
+    @Query("week") week?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Query("status") status?: string,
+    @Query("include") include?: string,
+    @Query("format") format?: string
+  ) {
+    return this.payouts.exportList({
+      adminUserId: await this.access.requireAccessToken(authorization),
+      scope, week, from, to, status, include, format
+    });
+  }
+
   @Post("mark-paid")
   async markPaid(@Headers("authorization") authorization: string | undefined, @Body() body: MarkPaidBody) {
     return this.payouts.markPaid({

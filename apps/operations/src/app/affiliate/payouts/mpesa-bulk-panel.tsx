@@ -169,6 +169,9 @@ export function MpesaBulkPanel(props: {
 
   const ready = rows.filter((row) => !row.selfPayment && row.bulkPhone && !row.exported);
   const readyKsh = ready.reduce((sum, row) => sum + row.amountKsh, 0);
+  // Left out of the file because they have no usable M-Pesa number (not because they were already exported or are the payer).
+  const noPhone = rows.filter((row) => !row.bulkPhone && !row.exported && !row.selfPayment);
+  const noPhoneKsh = noPhone.reduce((sum, row) => sum + row.amountKsh, 0);
   const request = operationsRequester(accessToken);
 
   async function run(key: string, action: () => Promise<void>) {
@@ -242,6 +245,9 @@ export function MpesaBulkPanel(props: {
             {ready.length
               ? t("可放进批量文件：{count} 人，合计 {amount}。", { count: ready.length, amount: formatKsh(readyKsh) })
               : t("没有可放进批量文件的人。")}
+            {noPhone.length ? (
+              <span className="text-destructive"> {t("{count} 人没有可用的手机号，没放进文件（{amount}）。", { count: noPhone.length, amount: formatKsh(noPhoneKsh) })}</span>
+            ) : null}
           </p>
           <Button disabled={!ready.length || busy !== null} onClick={exportFile}>
             <FileSpreadsheetIcon className="size-4" /> {busy === "export" ? t("导出中…") : t("导出 M-Pesa 批量付款文件")}
