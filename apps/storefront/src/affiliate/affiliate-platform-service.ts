@@ -7,6 +7,7 @@ import {
   CollectionStatus,
   CommissionStatus,
   InventoryItemStatus,
+  OrderStatus,
   Prisma,
   ProductStatus,
   prisma,
@@ -16,6 +17,7 @@ import {
   COLLECTION_MAX_ITEMS,
   affiliateConversionRate,
   affiliateEarningTotals,
+  affiliateOrderCounts,
   buildAffiliatePath,
   collectionPublicationIssue,
   normalizeTrackingSource,
@@ -311,7 +313,9 @@ export async function updateAffiliateCampaignStatus(
 
 export async function getAffiliateDashboard(session: CustomerSession | null) {
   const affiliate = await requireActiveAffiliate(session);
-  const [clicks, commissions, collections, campaigns, payouts] = await Promise.all([
+  const paidOrderStatuses = [OrderStatus.PAID, OrderStatus.FULFILLING, OrderStatus.COMPLETED];
+  const [clicks, viewTotal, clickTotal, orderTotal, orderPaid, commissions, collections, campaigns, payouts] = await Promise.all([
+    // A sample, only to find the top collection and product. The totals below are counted in the database.
     prisma.affiliateClick.findMany({
       where: { affiliateId: affiliate.id },
       select: {
@@ -323,6 +327,13 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       take: 1000,
       orderBy: { clickedAt: "desc" },
     }),
+    prisma.affiliateClick.count({ where: { affiliateId: affiliate.id } }),
+    prisma.affiliateClick.count({
+      where: { affiliateId: affiliate.id, OR: [{ productId: { not: null } }, { collectionId: { not: null } }] },
+    }),
+    // The same counts the back office shows for this promoter.
+    prisma.order.count({ where: { affiliateId: affiliate.id } }),
+    prisma.order.count({ where: { affiliateId: affiliate.id, status: { in: paidOrderStatuses } } }),
     prisma.commission.findMany({
       where: { affiliateId: affiliate.id },
       select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true },
@@ -350,15 +361,19 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     commissions.filter((row) => row.status === status).reduce((total, row) => total + row.commissionAmountKsh, 0),
   ]));
   const earned = affiliateEarningTotals(commissions);
+  const orderCounts = affiliateOrderCounts(orderTotal, orderPaid);
   return {
     affiliate,
     metrics: {
-      clicks: clicks.filter((click) => click.productId || click.collectionId).length,
-      views: clicks.length,
+      clicks: clickTotal,
+      views: viewTotal,
       orders: earned.orders,
+      ordersTotal: orderCounts.total,
+      ordersPaid: orderCounts.paid,
+      ordersUnpaid: orderCounts.unpaid,
       sales: earned.sales,
       commission: earned.commission,
-      conversionRate: affiliateConversionRate(earned.orders, clicks.length),
+      conversionRate: affiliateConversionRate(orderCounts.paid, viewTotal),
       topCollection: topCollection?.label ?? null,
       topProduct: topProduct?.label ?? null,
       collections,

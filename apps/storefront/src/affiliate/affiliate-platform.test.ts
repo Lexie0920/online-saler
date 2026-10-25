@@ -5,6 +5,7 @@ import {
   affiliateConversionRate,
   affiliateEarningTotals,
   affiliateLevelLabel,
+  affiliateOrderCounts,
   buildAffiliatePath,
   collectionPublicationIssue,
   normalizeTrackingSource,
@@ -69,4 +70,11 @@ test("dashboard sales count only orders that earned commission, so the rate read
   ]);
   assert.deepEqual(totals, { orders: 3, sales: 3400, commission: 850 });
   assert.equal(totals.commission / totals.sales, 0.25);
+});
+
+test("affiliate order counts: unpaid is total minus paid and never negative", () => {
+  assert.deepEqual(affiliateOrderCounts(10, 4), { total: 10, paid: 4, unpaid: 6 });
+  assert.deepEqual(affiliateOrderCounts(0, 0), { total: 0, paid: 0, unpaid: 0 });
+  assert.deepEqual(affiliateOrderCounts(3, 5), { total: 3, paid: 3, unpaid: 0 });
+  assert.deepEqual(affiliateOrderCounts(-2, -1), { total: 0, paid: 0, unpaid: 0 });
 });
