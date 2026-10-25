@@ -82,6 +82,18 @@ export function affiliateEarningTotals(
   };
 }
 
+/**
+ * Orders attributed to a promoter: all of them, how many are paid, how many are not (yet).
+ * "Paid" is the back office's definition (paid, being fulfilled or completed), so the
+ * promoter and the staff read the same numbers. Unpaid, cancelled and expired orders
+ * earn nothing but still count in the total.
+ */
+export function affiliateOrderCounts(total: number, paid: number): { total: number; paid: number; unpaid: number } {
+  const safeTotal = Math.max(0, total);
+  const safePaid = Math.min(Math.max(0, paid), safeTotal);
+  return { total: safeTotal, paid: safePaid, unpaid: safeTotal - safePaid };
+}
+
 export function affiliateLevelLabel(level: string): string {
   const match = /^LEVEL_([123])$/.exec(level);
   return match ? `Level ${match[1]}` : "Level 1";
