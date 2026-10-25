@@ -473,7 +473,6 @@ function Analytics({ payload, t }: { payload: AffiliateSessionPayload; t: Transl
   const metrics = payload.dashboard?.metrics;
   const rows = [
     [t("affiliate.metric.clicks"), String(metrics?.clicks ?? 0)],
-    [t("affiliate.metric.views"), String(metrics?.views ?? 0)],
     [t("affiliate.metric.ordersTotal"), String(metrics?.ordersTotal ?? 0)],
     [t("affiliate.metric.ordersPaid"), String(metrics?.ordersPaid ?? 0)],
     [t("affiliate.metric.ordersUnpaid"), String(metrics?.ordersUnpaid ?? 0)],

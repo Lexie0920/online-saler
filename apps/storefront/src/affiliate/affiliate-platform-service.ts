@@ -15,7 +15,6 @@ import {
 import type { CustomerSession } from "../auth/customer-auth";
 import {
   COLLECTION_MAX_ITEMS,
-  affiliateConversionRate,
   affiliateEarningTotals,
   affiliateOrderCounts,
   buildAffiliatePath,
@@ -314,7 +313,7 @@ export async function updateAffiliateCampaignStatus(
 export async function getAffiliateDashboard(session: CustomerSession | null) {
   const affiliate = await requireActiveAffiliate(session);
   const paidOrderStatuses = [OrderStatus.PAID, OrderStatus.FULFILLING, OrderStatus.COMPLETED];
-  const [clicks, viewTotal, clickTotal, orderTotal, orderPaid, commissions, collections, campaigns, payouts] = await Promise.all([
+  const [clicks, clickTotal, orderTotal, orderPaid, commissions, collections, campaigns, payouts] = await Promise.all([
     // A sample, only to find the top collection and product. The totals below are counted in the database.
     prisma.affiliateClick.findMany({
       where: { affiliateId: affiliate.id },
@@ -328,9 +327,6 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       orderBy: { clickedAt: "desc" },
     }),
     prisma.affiliateClick.count({ where: { affiliateId: affiliate.id } }),
-    prisma.affiliateClick.count({
-      where: { affiliateId: affiliate.id, OR: [{ productId: { not: null } }, { collectionId: { not: null } }] },
-    }),
     // The same counts the back office shows for this promoter.
     prisma.order.count({ where: { affiliateId: affiliate.id } }),
     prisma.order.count({ where: { affiliateId: affiliate.id, status: { in: paidOrderStatuses } } }),
@@ -365,15 +361,14 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
   return {
     affiliate,
     metrics: {
+      // Every recorded click, counted in the database: the same number the back office shows.
       clicks: clickTotal,
-      views: viewTotal,
       orders: earned.orders,
       ordersTotal: orderCounts.total,
       ordersPaid: orderCounts.paid,
       ordersUnpaid: orderCounts.unpaid,
       sales: earned.sales,
       commission: earned.commission,
-      conversionRate: affiliateConversionRate(orderCounts.paid, viewTotal),
       topCollection: topCollection?.label ?? null,
       topProduct: topProduct?.label ?? null,
       collections,
