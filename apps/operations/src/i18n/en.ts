@@ -1774,6 +1774,9 @@ export const enDictionary: Record<string, string> = {
   "佣金只在订单支付成功后生成，支付前订单不会产生有效佣金。":
     "Commission is only created once an order is paid. Unpaid orders never earn commission.",
   "佣金总额": "Total commission",
+  "已赚佣金（不含已拒绝）": "Earned commission (excl. rejected)",
+  "点击 {clicks} / 订单 {orders} / 已付款 {paid} / 未付款 {unpaid} · 转化率 {conversion}": "Clicks {clicks} / Orders {orders} / Paid {paid} / Unpaid {unpaid} · Conversion {conversion}",
+  "佣金：待确认 {pending} · 已确认 {confirmed} · 已付款 {paid} · 已拒绝 {rejected}": "Commission: Pending {pending} · Confirmed {confirmed} · Paid {paid} · Rejected {rejected}",
   "优化主图": "Improve the main image",
   "邮箱": "Email",
   "有口袋": "Has pockets",
