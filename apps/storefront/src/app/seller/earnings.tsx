@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { nextPayoutDate } from "../../affiliate/affiliate-platform";
+import { badgeMarkIndex, nextPayoutDate } from "../../affiliate/affiliate-platform";
 import type { AffiliateRecentOrder, AffiliateSessionPayload } from "../../affiliate/affiliate-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
-import { LineChart, runningTotal } from "./affiliate-charts";
+import { BadgeShield } from "./badge-art";
+import { CommissionChart } from "./commission-chart";
 import { money, payoutDay, payoutDayLabel, SectionHeading, type Translate } from "./center-ui";
 
 const dot = { waiting: "bg-yellow-400", ready: "bg-blue-500", paid: "bg-green-600", notCounted: "bg-red-500" } as const;
@@ -15,15 +16,19 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
   const dashboard = payload.dashboard;
   const totals = dashboard?.commission ?? {};
   const payouts = dashboard?.payouts ?? [];
-  const daily = dashboard?.daily ?? [];
-  const allTime = dashboard?.allTime ?? [];
   const orders = dashboard?.recentOrders ?? [];
   const [range, setRange] = useState<"30" | "all">("30");
   const hasEarnings = Object.values(totals).some((value) => value > 0) || payouts.length > 0;
-  const running = runningTotal(daily.map((day) => day.commission));
-  const points = range === "30"
-    ? daily.map((day, index) => ({ label: day.date.slice(5), value: running[index] }))
-    : allTime.map((week) => ({ label: week.date.slice(5), value: week.total }));
+  // One line of commission that counts (ready or paid), with the badges where they were unlocked.
+  const counted = dashboard?.counted;
+  const badgeState = dashboard?.badges;
+  const series = (range === "30" ? counted?.daily : counted?.weekly) ?? [];
+  const points = series.map((point) => ({ label: point.date.slice(5), total: point.total, added: point.added }));
+  const marks = (badgeState?.badges ?? [])
+    .filter((badge) => badge.state === "unlocked")
+    .map((badge) => ({ id: badge.id, name: badge.name, index: badgeMarkIndex(series, badge, counted?.firstCommissionDay ?? null, { clampToStart: range === "all" }) }))
+    .filter((mark) => mark.index >= 0);
+  const nextBadge = badgeState?.badges.find((badge) => badge.state === "next") ?? null;
   const ready = totals.CONFIRMED ?? 0;
   const phone = dashboard?.payoutPhone;
   const shortDate = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Africa/Nairobi" });
@@ -92,9 +97,54 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
           </div>
         </CardHeader>
         <CardContent>
-          <LineChart markBest={false} points={points} ariaLabel={t("affiliate.earnings.chartAria")} formatValue={(value) => money(value)} />
+          <CommissionChart
+            points={points}
+            marks={marks}
+            next={nextBadge}
+            ariaLabel={t("affiliate.badges.chartAria")}
+            nextLabel={nextBadge ? t("affiliate.badges.chartNext", { name: nextBadge.name, amount: nextBadge.thresholdKsh.toLocaleString("en-KE"), remaining: nextBadge.remainingKsh.toLocaleString("en-KE") }) : ""}
+            formatMoney={(value) => money(value)}
+          />
         </CardContent>
       </Card>
+
+      {badgeState ? (
+        <Card className="border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <CardTitle>{t("affiliate.badges.title")}</CardTitle>
+                <CardDescription>{t("affiliate.badges.body")}</CardDescription>
+              </div>
+              <p className="text-2xl font-semibold text-amber-700 dark:text-amber-400">{t("affiliate.badges.count", { unlocked: badgeState.unlocked, total: badgeState.badges.length })}</p>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+              {badgeState.badges.map((badge) => (
+                <li key={badge.id} className="flex flex-col items-center text-center">
+                  <BadgeShield id={badge.id} locked={badge.state === "locked"} size={88} />
+                  <span className="mt-1 text-sm font-extrabold tracking-wide">{badge.name}</span>
+                  <span className={`text-xs ${badge.state === "next" ? "font-semibold text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+                    {badge.id === "chipukizi" ? t("affiliate.badges.firstOrder") : `KSh ${badge.thresholdKsh.toLocaleString("en-KE")}`}
+                    {badge.state === "next" && badge.thresholdKsh > 0 ? ` · ${Math.round(badge.progress * 100)}%` : ""}
+                  </span>
+                  {badge.state === "next" && badge.thresholdKsh > 0 ? (
+                    <span className="mt-1 block h-1.5 w-20 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                      <span className="block h-full rounded-full bg-amber-500" style={{ width: `${Math.round(badge.progress * 100)}%` }} />
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <p className="rounded-md border border-amber-200 bg-card px-3 py-2 text-sm text-amber-950 dark:border-amber-900 dark:text-amber-100">
+              {nextBadge
+                ? <><strong>{t("affiliate.badges.nextLine", { name: nextBadge.name, remaining: nextBadge.remainingKsh.toLocaleString("en-KE") })}</strong>{(totals.PENDING ?? 0) > 0 ? ` ${t("affiliate.badges.waitingLine", { amount: (totals.PENDING ?? 0).toLocaleString("en-KE") })}` : ""}</>
+                : t("affiliate.badges.allDone")}
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader><CardTitle>{t("affiliate.earnings.howPaidTitle")}</CardTitle><CardDescription>{t("affiliate.earnings.howPaidBody")}</CardDescription></CardHeader>

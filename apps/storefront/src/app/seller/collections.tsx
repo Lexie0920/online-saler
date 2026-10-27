@@ -99,7 +99,14 @@ export function Collections({ collections, affiliateCode, refresh, openStatusPac
             const live = collection.status === "PUBLISHED";
             const archived = collection.status === "ARCHIVED";
             return (
-              <Card key={collection.id}>
+              <Card key={collection.id} className="overflow-hidden">
+                {collection.products.length ? (
+                  <div className="grid grid-cols-4 gap-1 p-3 pb-0" aria-hidden="true">
+                    {collection.products.slice(0, 4).map((product) => (
+                      <img key={product.id} src={product.image} alt="" loading="lazy" className="aspect-square w-full rounded-md object-cover" />
+                    ))}
+                  </div>
+                ) : null}
                 <CardHeader>
                   <CardTitle className="text-base">{collection.title}</CardTitle>
                   <p className="text-sm text-muted-foreground">

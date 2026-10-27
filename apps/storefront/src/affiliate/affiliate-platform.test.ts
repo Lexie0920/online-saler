@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AFFILIATE_LEVELS,
+  affiliateBadges,
   affiliateConversionRate,
+  affiliateCountedDaily,
+  affiliateCountedTotal,
+  affiliateCountedWeekly,
+  affiliateFirstCommissionDay,
+  badgeMarkIndex,
+  AFFILIATE_BADGES,
   affiliateDailySeries,
   affiliateNextGoal,
   affiliateOrderState,
@@ -165,4 +172,65 @@ test("flow 15: phone is masked, order states are plain, top rows are the biggest
   assert.deepEqual(affiliateOrderState("REJECTED", "REFUNDED"), { state: "notCounted", reason: "returned" });
   assert.deepEqual(affiliateOrderState("REJECTED", "CANCELLED"), { state: "notCounted", reason: "cancelled" });
   assert.deepEqual(topRows([{ count: 1 }, { count: 9 }, { count: 4 }, { count: 7 }], 3), [{ count: 9 }, { count: 7 }, { count: 4 }]);
+});
+
+const badgeNow = new Date("2026-10-27T10:00:00Z"); // Tuesday
+const badgeRows = [
+  { status: "PAID", commissionAmountKsh: 600, createdAt: new Date("2026-09-01T09:00:00Z"), confirmedAt: new Date("2026-09-05T09:00:00Z") },
+  { status: "CONFIRMED", commissionAmountKsh: 400, createdAt: new Date("2026-10-20T09:00:00Z"), confirmedAt: new Date("2026-10-23T09:00:00Z") },
+  { status: "PENDING", commissionAmountKsh: 900, createdAt: new Date("2026-10-26T09:00:00Z") },
+  { status: "REJECTED", commissionAmountKsh: 700, createdAt: new Date("2026-10-10T09:00:00Z"), confirmedAt: null },
+];
+
+test("flow 16: badges count only ready or paid commission, on the day it was confirmed", () => {
+  assert.equal(affiliateCountedTotal(badgeRows), 1000);
+  const daily = affiliateCountedDaily(badgeRows, 7, badgeNow);
+  assert.equal(daily.length, 7);
+  assert.equal(daily[0].date, "2026-10-21");
+  // 600 was counted before the window, so the line starts there and only goes up.
+  assert.deepEqual(daily.map((point) => point.total), [600, 600, 1000, 1000, 1000, 1000, 1000]);
+  assert.deepEqual(daily.map((point) => point.added), [0, 0, 400, 0, 0, 0, 0]);
+  const weekly = affiliateCountedWeekly(badgeRows, 52, badgeNow);
+  assert.equal(weekly[weekly.length - 1].total, 1000);
+  assert.equal(weekly[weekly.length - 1].added, 0);
+  assert.equal(weekly.find((point) => point.date === "2026-10-19")?.added, 400);
+  assert.deepEqual(affiliateCountedWeekly([], 52, badgeNow), []);
+});
+
+test("flow 17: the next badge shows how far away it is, unlocked ones stay unlocked", () => {
+  const { badges, unlocked } = affiliateBadges(5390, true);
+  assert.equal(unlocked, 4);
+  assert.deepEqual(badges.map((badge) => badge.state), ["unlocked", "unlocked", "unlocked", "unlocked", "next", "locked", "locked"]);
+  const next = badges.find((badge) => badge.state === "next")!;
+  assert.equal(next.id, "mkali");
+  assert.equal(next.remainingKsh, 4610);
+  assert.equal(Math.round(next.progress * 100), 54);
+  // Nothing yet: the first badge is next and needs a first commission.
+  assert.equal(affiliateBadges(0, false).badges[0].state, "next");
+  // A waiting commission is enough for Chipukizi, but not for the money badges.
+  const waiting = affiliateBadges(0, true).badges;
+  assert.equal(waiting[0].state, "unlocked");
+  assert.equal(waiting[1].state, "next");
+  assert.equal(AFFILIATE_BADGES.length, 7);
+});
+
+test("flow 18: badges sit on the point where they were reached", () => {
+  const series = [
+    { date: "d1", added: 0, total: 0 },
+    { date: "d2", added: 600, total: 600 },
+    { date: "d3", added: 500, total: 1100 },
+    { date: "d4", added: 0, total: 1100 },
+  ];
+  const find = (id: string) => AFFILIATE_BADGES.find((badge) => badge.id === id)!;
+  assert.equal(badgeMarkIndex(series, find("fiti"), "d2"), 1);
+  assert.equal(badgeMarkIndex(series, find("poa"), "d2"), 2);
+  assert.equal(badgeMarkIndex(series, find("moto"), "d2"), -1);
+  assert.equal(badgeMarkIndex(series, find("chipukizi"), "d2"), 1);
+  // Reached before this chart starts: no mark on it.
+  assert.equal(badgeMarkIndex(series, find("chipukizi"), "d0"), -1);
+  assert.equal(badgeMarkIndex(series, find("chipukizi"), "d0", { clampToStart: true }), 0);
+  const later = [{ date: "d5", added: 0, total: 1100 }, { date: "d6", added: 0, total: 1100 }];
+  assert.equal(badgeMarkIndex(later, find("poa"), "d1"), -1);
+  assert.equal(affiliateFirstCommissionDay([{ status: "REJECTED", createdAt: new Date("2026-10-01T09:00:00Z") }, { status: "PENDING", createdAt: new Date("2026-10-05T09:00:00Z") }]), "2026-10-05");
+  assert.equal(affiliateFirstCommissionDay([]), null);
 });

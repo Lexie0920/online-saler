@@ -257,6 +257,134 @@ export function affiliateWeeklyCumulative(
   return out.slice(-weeks);
 }
 
+export type AffiliateCountedPoint = { date: string; added: number; total: number };
+
+type CountedRow = { status: string; commissionAmountKsh: number; createdAt: Date; confirmedAt?: Date | null; eligibleAt?: Date | null };
+
+/** Commission that counts for badges: ready to be paid or already paid. The day it counts is the day it was confirmed. */
+function countedRows(commissions: CountedRow[]) {
+  return commissions
+    .filter((row) => row.status === "CONFIRMED" || row.status === "PAID")
+    .map((row) => ({ at: row.confirmedAt ?? row.eligibleAt ?? row.createdAt, amount: row.commissionAmountKsh }));
+}
+
+/** Total commission that counts for badges. */
+export function affiliateCountedTotal(commissions: CountedRow[]): number {
+  return countedRows(commissions).reduce((total, row) => total + row.amount, 0);
+}
+
+/** Counted commission added each Nairobi day for the last `days` days, with the running total (money before the first day included). */
+export function affiliateCountedDaily(commissions: CountedRow[], days: number, now: Date = new Date()): AffiliateCountedPoint[] {
+  const rows = countedRows(commissions);
+  const dates: string[] = [];
+  for (let offset = days - 1; offset >= 0; offset -= 1) dates.push(nairobiDay(new Date(now.getTime() - offset * 24 * 60 * 60 * 1000)));
+  const added = new Map<string, number>(dates.map((date) => [date, 0]));
+  let total = 0;
+  for (const row of rows) {
+    const day = nairobiDay(row.at);
+    if (day < dates[0]) total += row.amount;
+    else if (added.has(day)) added.set(day, (added.get(day) ?? 0) + row.amount);
+  }
+  return dates.map((date) => {
+    const amount = added.get(date) ?? 0;
+    total += amount;
+    return { date, added: amount, total };
+  });
+}
+
+/** The same, one point per Nairobi week (Monday start), from the first counted week up to this week. */
+export function affiliateCountedWeekly(commissions: CountedRow[], weeks = 52, now: Date = new Date()): AffiliateCountedPoint[] {
+  const rows = countedRows(commissions);
+  if (!rows.length) return [];
+  const byWeek = new Map<string, number>();
+  for (const row of rows) {
+    const week = nairobiWeekStart(row.at);
+    byWeek.set(week, (byWeek.get(week) ?? 0) + row.amount);
+  }
+  const thisWeek = nairobiWeekStart(now);
+  const first = [...byWeek.keys()].sort()[0];
+  const out: AffiliateCountedPoint[] = [];
+  let total = 0;
+  for (let cursor = new Date(`${first}T00:00:00Z`); cursor.toISOString().slice(0, 10) <= thisWeek; cursor = new Date(cursor.getTime() + 7 * 24 * 60 * 60 * 1000)) {
+    const date = cursor.toISOString().slice(0, 10);
+    const added = byWeek.get(date) ?? 0;
+    total += added;
+    out.push({ date, added, total });
+  }
+  return out.slice(-weeks);
+}
+
+/** The Nairobi day of the first commission that is not rejected, waiting ones included. Null when there is none. */
+export function affiliateFirstCommissionDay(commissions: Array<{ status: string; createdAt: Date }>): string | null {
+  const days = commissions.filter((row) => row.status !== "REJECTED").map((row) => nairobiDay(row.createdAt)).sort();
+  return days[0] ?? null;
+}
+
+export type AffiliateBadgeId = "chipukizi" | "fiti" | "poa" | "moto" | "mkali" | "boss" | "legend";
+
+/** Badges in order. Chipukizi comes with the first commission (waiting ones count); the rest come with counted commission. */
+export const AFFILIATE_BADGES: ReadonlyArray<{ id: AffiliateBadgeId; name: string; thresholdKsh: number }> = [
+  { id: "chipukizi", name: "Chipukizi", thresholdKsh: 0 },
+  { id: "fiti", name: "Fiti", thresholdKsh: 500 },
+  { id: "poa", name: "Poa", thresholdKsh: 1000 },
+  { id: "moto", name: "Moto", thresholdKsh: 5000 },
+  { id: "mkali", name: "Mkali", thresholdKsh: 10000 },
+  { id: "boss", name: "Boss", thresholdKsh: 20000 },
+  { id: "legend", name: "Legend", thresholdKsh: 50000 },
+];
+
+export type AffiliateBadgeState = {
+  id: AffiliateBadgeId;
+  name: string;
+  thresholdKsh: number;
+  state: "unlocked" | "next" | "locked";
+  /** 0 to 1, only for the next badge. */
+  progress: number;
+  /** KSh still needed, only for the next badge. */
+  remainingKsh: number;
+};
+
+/** Which badges are unlocked, which one is next and how close it is. Unlocked badges are never taken back. */
+export function affiliateBadges(countedKsh: number, hasFirstCommission: boolean): { badges: AffiliateBadgeState[]; unlocked: number } {
+  let nextFound = false;
+  const badges = AFFILIATE_BADGES.map((badge): AffiliateBadgeState => {
+    const unlocked = badge.id === "chipukizi" ? hasFirstCommission || countedKsh > 0 : countedKsh >= badge.thresholdKsh;
+    const base = { id: badge.id, name: badge.name, thresholdKsh: badge.thresholdKsh };
+    if (unlocked) { return { ...base, state: "unlocked", progress: 1, remainingKsh: 0 }; }
+    if (!nextFound) {
+      nextFound = true;
+      // Progress is counted from zero, so the bar matches "KSh x of y".
+      const progress = badge.thresholdKsh > 0 ? Math.min(1, countedKsh / badge.thresholdKsh) : 0;
+      return { ...base, state: "next", progress, remainingKsh: Math.max(0, badge.thresholdKsh - countedKsh) };
+    }
+    return { ...base, state: "locked", progress: 0, remainingKsh: 0 };
+  });
+  return { badges, unlocked: badges.filter((badge) => badge.state === "unlocked").length };
+}
+
+/**
+ * Index in a counted series where a badge was reached: the first point whose total passes the threshold.
+ * Chipukizi sits on the point that holds the first commission. -1 when it was reached before the series starts,
+ * unless `clampToStart` is set (the all-time view, which starts at the first counted week).
+ */
+export function badgeMarkIndex(
+  series: AffiliateCountedPoint[],
+  badge: { id: string; thresholdKsh: number },
+  firstCommissionDay: string | null,
+  options: { clampToStart?: boolean } = {},
+): number {
+  if (!series.length) return -1;
+  if (badge.id === "chipukizi") {
+    if (!firstCommissionDay) return -1;
+    let found = -1;
+    series.forEach((point, index) => { if (point.date <= firstCommissionDay) found = index; });
+    return found === -1 && options.clampToStart ? 0 : found;
+  }
+  // A badge reached before the first point of the series has no mark on this chart.
+  if (series[0].total - series[0].added >= badge.thresholdKsh) return -1;
+  return series.findIndex((point) => point.total >= badge.thresholdKsh);
+}
+
 /** A phone number with the middle hidden, e.g. 0712345123 becomes 07•• ••• 123. */
 export function maskPhone(phone: string | null | undefined): string | null {
   let digits = (phone ?? "").replace(/\D/g, "");

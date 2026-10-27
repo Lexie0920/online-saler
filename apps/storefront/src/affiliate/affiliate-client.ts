@@ -88,6 +88,17 @@ export type AffiliateDashboard = {
   orderChannels?: Array<{ label: string; count: number }>;
   /** Commission earned so far, week by week since the first order. */
   allTime?: Array<{ date: string; total: number }>;
+  /** Commission that counts for badges (ready or paid): the running total, and what was added each day and week. */
+  counted?: {
+    total: number;
+    daily: Array<{ date: string; added: number; total: number }>;
+    weekly: Array<{ date: string; added: number; total: number }>;
+    firstCommissionDay: string | null;
+  };
+  badges?: {
+    unlocked: number;
+    badges: Array<{ id: "chipukizi" | "fiti" | "poa" | "moto" | "mkali" | "boss" | "legend"; name: string; thresholdKsh: number; state: "unlocked" | "next" | "locked"; progress: number; remainingKsh: number }>;
+  };
   /** M-Pesa number with the middle hidden, e.g. 07•• ••• 123. */
   payoutPhone?: string | null;
   /** Everyone's week, no names: promoters who shared and promoters who got orders. */

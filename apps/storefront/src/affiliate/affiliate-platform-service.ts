@@ -18,6 +18,11 @@ import {
   affiliateDailySeries,
   affiliateOrderState,
   affiliateWeeklyCumulative,
+  affiliateBadges,
+  affiliateCountedDaily,
+  affiliateCountedTotal,
+  affiliateCountedWeekly,
+  affiliateFirstCommissionDay,
   maskPhone,
   topRows,
   clicksByChannel,
@@ -360,7 +365,7 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     prisma.order.count({ where: { affiliateId: affiliate.id, status: { in: paidOrderStatuses } } }),
     prisma.commission.findMany({
       where: { affiliateId: affiliate.id },
-      select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true, createdAt: true },
+      select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true, createdAt: true, eligibleAt: true, confirmedAt: true },
     }),
     prisma.collection.count({ where: { affiliateId: affiliate.id } }),
     prisma.campaign.count({ where: { affiliateId: affiliate.id } }),
@@ -416,6 +421,8 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     commissions.filter((row) => row.status === status).reduce((total, row) => total + row.commissionAmountKsh, 0),
   ]));
   const earned = affiliateEarningTotals(commissions);
+  const countedTotal = affiliateCountedTotal(commissions);
+  const firstCommissionDay = affiliateFirstCommissionDay(commissions);
   const orderCounts = affiliateOrderCounts(orderTotal, orderPaid);
   return {
     affiliate,
@@ -438,6 +445,14 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     topProducts,
     orderChannels: topRows(clicksByChannel(countByNullable(orderSources.map((row) => row.source)))),
     allTime: affiliateWeeklyCumulative(commissions),
+    // Commission that counts for badges (ready or paid), and the badges themselves.
+    counted: {
+      total: countedTotal,
+      daily: affiliateCountedDaily(commissions, 30),
+      weekly: affiliateCountedWeekly(commissions),
+      firstCommissionDay,
+    },
+    badges: affiliateBadges(countedTotal, firstCommissionDay !== null),
     payoutPhone: maskPhone(payeePhone?.phone),
     community: { shared: sharedThisWeek.length, gotOrders: orderedThisWeek.length },
     recentOrders: recentCommissions.map((row) => ({

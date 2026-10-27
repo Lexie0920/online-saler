@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { BarChart3, CircleDollarSign, Copy, Eye, LayoutDashboard, LoaderCircle, Share2, Users } from "lucide-react";
+import { BarChart3, CircleDollarSign, Copy, Eye, Home as HomeIcon, LoaderCircle, Share2, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type AffiliateSessionPayload, useAffiliateSession } from "../../affiliate/affiliate-client";
 import { Badge } from "../../components/ui/badge";
@@ -10,6 +10,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { useStorefrontI18n } from "../../i18n/use-storefront-i18n";
 import { SiteHeader } from "../components/site-header";
+import { BadgeShield } from "./badge-art";
 import { CenterMessage, copyText, Notice, type Translate } from "./center-ui";
 import { Collections } from "./collections";
 import { Earnings } from "./earnings";
@@ -30,7 +31,7 @@ type ShareTab = "packs" | "videos" | "collections" | "new";
 type CenterTab = "dashboard" | "tiktok-video" | "collections" | "campaigns" | "share-assets" | "analytics" | "commission" | "new-arrivals" | CenterSection;
 
 const sections: Array<{ id: CenterSection; label: "affiliate.nav.home" | "affiliate.nav.share" | "affiliate.nav.results" | "affiliate.nav.earnings" | "affiliate.nav.community"; icon: React.ReactNode }> = [
-  { id: "home", label: "affiliate.nav.home", icon: <LayoutDashboard /> },
+  { id: "home", label: "affiliate.nav.home", icon: <HomeIcon /> },
   { id: "share", label: "affiliate.nav.share", icon: <Share2 /> },
   { id: "results", label: "affiliate.nav.results", icon: <BarChart3 /> },
   { id: "earnings", label: "affiliate.nav.earnings", icon: <CircleDollarSign /> },
@@ -199,7 +200,60 @@ function CommunityPlaceholder({ payload, t }: { payload: AffiliateSessionPayload
         </CardHeader>
         <CardContent><Notice>{t("affiliate.community.later")}</Notice></CardContent>
       </Card>
+      <CommunityExample t={t} />
     </div>
+  );
+}
+
+/** A made-up board and two made-up posts, so promoters can see what is coming. Always labelled as an example. */
+function CommunityExample({ t }: { t: Translate }) {
+  const board = [
+    { id: "a", orders: 41, badge: "mkali", name: t("affiliate.community.promoter", { letter: "A" }) },
+    { id: "b", orders: 33, badge: "moto", name: t("affiliate.community.promoter", { letter: "B" }) },
+    { id: "c", orders: 29, badge: "poa", name: t("affiliate.community.promoter", { letter: "C" }) },
+    { id: "you", orders: 12, badge: "moto", name: t("affiliate.community.you") },
+  ];
+  const posts = [
+    { id: "p1", who: t("affiliate.community.promoter", { letter: "A" }), text: t("affiliate.community.post1"), orders: 3 },
+    { id: "p2", who: t("affiliate.community.promoter", { letter: "B" }), text: t("affiliate.community.post2"), orders: 2 },
+  ];
+  return (
+    <section className="space-y-3 opacity-90" aria-label={t("affiliate.community.example")}>
+      <p className="inline-block rounded-md bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900">{t("affiliate.community.example")}</p>
+      <div className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{t("affiliate.community.boardTitle")}</CardTitle>
+            <CardDescription>{t("affiliate.community.boardBody")}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ol className="text-sm">
+              {board.map((row, index) => (
+                <li key={row.id} className={`flex items-center gap-2 border-t py-2 ${row.id === "you" ? "bg-green-50 dark:bg-green-950/30" : ""}`}>
+                  <span className="w-5 text-muted-foreground">{index + 1}</span>
+                  <BadgeShield id={row.badge} size={22} />
+                  <span className="flex-1">{row.name}</span>
+                  <strong>{t("affiliate.community.orders", { count: row.orders })}</strong>
+                </li>
+              ))}
+            </ol>
+          </CardContent>
+        </Card>
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold">{t("affiliate.community.postsTitle")}</h3>
+          {posts.map((post) => (
+            <Card key={post.id}>
+              <CardContent className="space-y-2 pt-4">
+                <p className="text-sm font-semibold">{post.who}</p>
+                <div className="flex h-24 items-center justify-center rounded-md bg-muted text-xs text-muted-foreground">{t("affiliate.community.postPicture")}</div>
+                <p className="text-sm">{post.text}</p>
+                <p className="text-sm font-semibold text-green-700">{t("affiliate.community.postFromOrders", { count: post.orders })}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
