@@ -43,12 +43,13 @@ import { useStorefrontI18n } from "../../i18n/use-storefront-i18n";
 import { SiteHeader } from "../components/site-header";
 import { bestPoint, EXAMPLE_ORDERS_PER_DAY, LineChart, runningTotal } from "./affiliate-charts";
 import { RunThroughVideos } from "./run-through-videos";
+import { NewArrivals } from "./new-arrivals";
 import { ShareDialog } from "./share-dialog";
 
 /** The five sidebar sections. */
 type CenterSection = "home" | "share" | "results" | "earnings" | "community";
 /** The tabs inside Share. */
-type ShareTab = "packs" | "videos" | "collections";
+type ShareTab = "packs" | "videos" | "collections" | "new";
 /**
  * Where a button or an old link wants to go. The old section names keep working
  * (for example /seller?tab=share-assets), they are mapped onto the five sections below.
@@ -64,10 +65,11 @@ const sections: Array<{ id: CenterSection; label: "affiliate.nav.home" | "affili
   { id: "community", label: "affiliate.nav.community", icon: <Users /> },
 ];
 
-const shareTabs: Array<{ id: ShareTab; label: "affiliate.share.packs" | "affiliate.share.videos" | "affiliate.share.collections" }> = [
+const shareTabs: Array<{ id: ShareTab; label: "affiliate.share.packs" | "affiliate.share.videos" | "affiliate.share.collections" | "affiliate.share.new" }> = [
   { id: "packs", label: "affiliate.share.packs" },
   { id: "videos", label: "affiliate.share.videos" },
   { id: "collections", label: "affiliate.share.collections" },
+  { id: "new", label: "affiliate.share.new" },
 ];
 
 const destinations: Record<CenterTab, { section: CenterSection; share?: ShareTab }> = {
@@ -179,6 +181,7 @@ export function AffiliateCenter() {
                 </div>
                 {shareTab === "packs" ? <ShareAssets payload={payload} t={t} /> : null}
                 {shareTab === "videos" ? <RunThroughVideos /> : null}
+                {shareTab === "new" ? <NewArrivals affiliateCode={payload.affiliate.affiliateCode} /> : null}
                 {shareTab === "collections" ? <Collections collections={payload.collections ?? []} affiliateCode={payload.affiliate.affiliateCode} refresh={refresh} t={t} /> : null}
               </div>
             ) : null}
