@@ -94,7 +94,9 @@ export class OperationsAffiliateService {
         where: { affiliateId: { not: null }, status: { in: [OrderStatus.PAID, OrderStatus.FULFILLING, OrderStatus.COMPLETED] } },
         _sum: { itemSubtotalKsh: true }
       }),
+      // Earned commission leaves out rejected ones, same as the storefront Affiliate Center.
       prisma.commission.aggregate({
+        where: { status: { not: CommissionStatus.REJECTED } },
         _sum: {
           commissionAmountKsh: true
         }
@@ -111,7 +113,7 @@ export class OperationsAffiliateService {
       confirmedCommissions,
       paidCommissions,
       attributedSalesKsh: sales._sum.itemSubtotalKsh ?? 0,
-      totalCommissionKsh: commissions._sum.commissionAmountKsh ?? 0
+      earnedCommissionKsh: commissions._sum.commissionAmountKsh ?? 0
     };
   }
 
@@ -168,6 +170,7 @@ export class OperationsAffiliateService {
           pendingCommissionKsh: commissionKsh(affiliate.id, CommissionStatus.PENDING),
           confirmedCommissionKsh: commissionKsh(affiliate.id, CommissionStatus.CONFIRMED),
           paidCommissionKsh: commissionKsh(affiliate.id, CommissionStatus.PAID),
+          rejectedCommissionKsh: commissionKsh(affiliate.id, CommissionStatus.REJECTED),
           lastClickAt: lastClicks.find((row) => row.affiliateId === affiliate.id)?._max.clickedAt ?? null,
           lastOrderAt: lastOrders.find((row) => row.affiliateId === affiliate.id)?._max.createdAt ?? null
         },

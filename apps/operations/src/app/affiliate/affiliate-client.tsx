@@ -32,7 +32,7 @@ type Summary = {
   confirmedCommissions: number;
   paidCommissions: number;
   attributedSalesKsh: number;
-  totalCommissionKsh: number;
+  earnedCommissionKsh: number;
 };
 
 type AffiliateRow = {
@@ -51,6 +51,7 @@ type AffiliateRow = {
     pendingCommissionKsh: number;
     confirmedCommissionKsh: number;
     paidCommissionKsh: number;
+    rejectedCommissionKsh: number;
     lastClickAt?: string | null;
     lastOrderAt?: string | null;
   };
@@ -448,7 +449,7 @@ export function AffiliateCenterPage({
     { label: t("归因订单"), value: String(summary?.attributedOrders ?? 0) },
     { label: t("归因销售额"), value: money(summary?.attributedSalesKsh ?? 0) },
     { label: t("待确认佣金"), value: String(summary?.pendingCommissions ?? 0) },
-    { label: t("佣金总额"), value: money(summary?.totalCommissionKsh ?? 0) }
+    { label: t("已赚佣金（不含已拒绝）"), value: money(summary?.earnedCommissionKsh ?? 0) }
   ], [summary]);
 
   return (
@@ -1066,11 +1067,22 @@ function AffiliateStats({ affiliate }: { affiliate: AffiliateRow }) {
   return (
     <div className="grid gap-1">
       <div>
-        {t("点击")} {clicks} {t("/ 订单")} {affiliate._count.orders} {t("/ 已付款")} {stats.paidOrders} · {t("转化率")} {conversion}
+        {t("点击 {clicks} / 订单 {orders} / 已付款 {paid} / 未付款 {unpaid} · 转化率 {conversion}", {
+          clicks,
+          orders: affiliate._count.orders,
+          paid: stats.paidOrders,
+          unpaid: Math.max(0, affiliate._count.orders - stats.paidOrders),
+          conversion
+        })}
       </div>
       <div>{t("带来销售额")} {money(stats.salesKsh)}</div>
       <div>
-        {t("佣金")}：{t("待确认")} {money(stats.pendingCommissionKsh)} · {t("已确认")} {money(stats.confirmedCommissionKsh)} · {t("已付款")} {money(stats.paidCommissionKsh)}
+        {t("佣金：待确认 {pending} · 已确认 {confirmed} · 已付款 {paid} · 已拒绝 {rejected}", {
+          pending: money(stats.pendingCommissionKsh),
+          confirmed: money(stats.confirmedCommissionKsh),
+          paid: money(stats.paidCommissionKsh),
+          rejected: money(stats.rejectedCommissionKsh)
+        })}
       </div>
       <div className="text-muted-foreground text-xs">
         {t("最近点击")} {dateTime(stats.lastClickAt)} · {t("最近下单")} {dateTime(stats.lastOrderAt)}
