@@ -11,6 +11,8 @@ import {
   affiliateLevelLabel,
   affiliateOrderCounts,
   buildAffiliatePath,
+  buildShareLink,
+  clicksByChannel,
   collectionPublicationIssue,
   normalizeTrackingSource,
   normalizeTrackingValue,
@@ -116,4 +118,22 @@ test("flow 11: week comparison and the next small goal", () => {
   assert.deepEqual(affiliateNextGoal({ collections: 1, largestCollectionItems: 2, ordersTotal: 0, thisWeek: 0, lastWeek: 0 }), { kind: "addProducts", count: 3 });
   assert.deepEqual(affiliateNextGoal({ collections: 1, largestCollectionItems: 6, ordersTotal: 0, thisWeek: 0, lastWeek: 0 }), { kind: "firstOrder" });
   assert.deepEqual(affiliateNextGoal({ collections: 1, largestCollectionItems: 6, ordersTotal: 5, thisWeek: 3, lastWeek: 4 }), { kind: "beatLastWeek", target: 5 });
+});
+
+test("flow 12: a share link carries the channel the promoter picked", () => {
+  assert.equal(buildShareLink("/c/summer-edit", "AFF-1", "STATUS"), "/c/summer-edit?ref=AFF-1&source=whatsapp-status&placement=status-pack&campaign=organic");
+  assert.equal(buildShareLink("/c/summer-edit", "AFF-1", "WHATSAPP"), "/c/summer-edit?ref=AFF-1&source=whatsapp&placement=direct-message&campaign=organic");
+});
+
+test("flow 13: clicks are grouped by everyday channel name, unknown sources become Other", () => {
+  assert.deepEqual(clicksByChannel([
+    { source: "whatsapp", count: 5 },
+    { source: "whatsapp-status", count: 9 },
+    { source: "direct", count: 2 },
+    { source: null, count: 1 },
+  ]), [
+    { label: "WhatsApp Status", count: 9 },
+    { label: "WhatsApp chats", count: 5 },
+    { label: "Other", count: 3 },
+  ]);
 });

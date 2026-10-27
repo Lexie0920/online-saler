@@ -16,6 +16,7 @@ import type { CustomerSession } from "../auth/customer-auth";
 import {
   COLLECTION_MAX_ITEMS,
   affiliateDailySeries,
+  clicksByChannel,
   affiliateEarningTotals,
   affiliateOrderCounts,
   buildAffiliatePath,
@@ -314,7 +315,7 @@ export async function updateAffiliateCampaignStatus(
 export async function getAffiliateDashboard(session: CustomerSession | null) {
   const affiliate = await requireActiveAffiliate(session);
   const paidOrderStatuses = [OrderStatus.PAID, OrderStatus.FULFILLING, OrderStatus.COMPLETED];
-  const [clicks, clickTotal, orderTotal, orderPaid, commissions, collections, campaigns, payouts] = await Promise.all([
+  const [clicks, clickTotal, clickSources, orderTotal, orderPaid, commissions, collections, campaigns, payouts] = await Promise.all([
     // A sample, only to find the top collection and product. The totals below are counted in the database.
     prisma.affiliateClick.findMany({
       where: { affiliateId: affiliate.id },
@@ -328,6 +329,8 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       orderBy: { clickedAt: "desc" },
     }),
     prisma.affiliateClick.count({ where: { affiliateId: affiliate.id } }),
+    // Where the clicks came from (WhatsApp, Status, TikTok...), counted in the database.
+    prisma.affiliateClick.groupBy({ by: ["source"], where: { affiliateId: affiliate.id }, _count: { _all: true } }),
     // The same counts the back office shows for this promoter.
     prisma.order.count({ where: { affiliateId: affiliate.id } }),
     prisma.order.count({ where: { affiliateId: affiliate.id, status: { in: paidOrderStatuses } } }),
@@ -378,6 +381,7 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     commission: commissionTotals,
     // One point per Nairobi day, for the order and earnings charts.
     daily: affiliateDailySeries(commissions, 30),
+    clickChannels: clicksByChannel(clickSources.map((row) => ({ source: row.source, count: row._count._all }))),
     payouts: payouts.map((payout) => ({
       id: payout.id,
       amountKsh: payout.amountKsh,

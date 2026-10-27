@@ -176,3 +176,36 @@ export function affiliateNextGoal(input: {
   if (input.ordersTotal === 0) return { kind: "firstOrder" };
   return { kind: "beatLastWeek", target: Math.max(input.thisWeek, input.lastWeek) + 1 };
 }
+
+export const SHARE_CHANNELS = ["WHATSAPP", "STATUS", "TIKTOK", "FACEBOOK"] as const;
+export type ShareChannel = (typeof SHARE_CHANNELS)[number];
+
+const SHARE_CHANNEL_TRACKING: Record<ShareChannel, { source: string; placement: string }> = {
+  WHATSAPP: { source: "whatsapp", placement: "direct-message" },
+  STATUS: { source: "whatsapp-status", placement: "status-pack" },
+  TIKTOK: { source: "tiktok", placement: "link-in-bio" },
+  FACEBOOK: { source: "facebook", placement: "post" },
+};
+
+/** A share link for a page, tagged with the channel the promoter picked. No setup step is needed first. */
+export function buildShareLink(path: string, affiliateCode: string, channel: ShareChannel): string {
+  return buildAffiliatePath(path, affiliateCode, { ...SHARE_CHANNEL_TRACKING[channel], campaign: "organic" });
+}
+
+/** Everyday name for a click `source`, for the "where clicks came from" list. */
+export function shareSourceLabel(source: string | null | undefined): string {
+  const known = (Object.entries(SHARE_CHANNEL_TRACKING) as Array<[ShareChannel, { source: string }]>)
+    .find(([, tracking]) => tracking.source === (source ?? "").toLowerCase());
+  if (!known) return "Other";
+  return { WHATSAPP: "WhatsApp chats", STATUS: "WhatsApp Status", TIKTOK: "TikTok", FACEBOOK: "Facebook" }[known[0]];
+}
+
+/** Group click counts by everyday channel name, biggest first. Unknown sources are summed as "Other". */
+export function clicksByChannel(rows: Array<{ source: string | null; count: number }>): Array<{ label: string; count: number }> {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const label = shareSourceLabel(row.source);
+    totals.set(label, (totals.get(label) ?? 0) + row.count);
+  }
+  return [...totals.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count);
+}

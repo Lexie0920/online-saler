@@ -14,7 +14,6 @@ import {
   FolderHeart,
   LayoutDashboard,
   LoaderCircle,
-  Megaphone,
   PackageCheck,
   PauseCircle,
   Plus,
@@ -26,7 +25,6 @@ import { LAUNCH_AFFILIATE_COMMISSION_RATE_BPS } from "@online-saler/business-rul
 import { FormEvent, useEffect, useState } from "react";
 import {
   affiliateJson,
-  type AffiliateCampaign,
   type AffiliateCollection,
   type AffiliateSessionPayload,
   useAffiliateSession,
@@ -40,17 +38,17 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Textarea } from "../../components/ui/textarea";
 import { useStorefrontI18n } from "../../i18n/use-storefront-i18n";
 import { SiteHeader } from "../components/site-header";
 import { bestPoint, EXAMPLE_ORDERS_PER_DAY, LineChart, runningTotal } from "./affiliate-charts";
 import { RunThroughVideos } from "./run-through-videos";
+import { ShareDialog } from "./share-dialog";
 
 /** The five sidebar sections. */
 type CenterSection = "home" | "share" | "results" | "earnings" | "community";
 /** The tabs inside Share. */
-type ShareTab = "packs" | "videos" | "collections" | "links";
+type ShareTab = "packs" | "videos" | "collections";
 /**
  * Where a button or an old link wants to go. The old section names keep working
  * (for example /seller?tab=share-assets), they are mapped onto the five sections below.
@@ -66,18 +64,17 @@ const sections: Array<{ id: CenterSection; label: "affiliate.nav.home" | "affili
   { id: "community", label: "affiliate.nav.community", icon: <Users /> },
 ];
 
-const shareTabs: Array<{ id: ShareTab; label: "affiliate.share.packs" | "affiliate.share.videos" | "affiliate.share.collections" | "affiliate.share.links" }> = [
+const shareTabs: Array<{ id: ShareTab; label: "affiliate.share.packs" | "affiliate.share.videos" | "affiliate.share.collections" }> = [
   { id: "packs", label: "affiliate.share.packs" },
   { id: "videos", label: "affiliate.share.videos" },
   { id: "collections", label: "affiliate.share.collections" },
-  { id: "links", label: "affiliate.share.links" },
 ];
 
 const destinations: Record<CenterTab, { section: CenterSection; share?: ShareTab }> = {
   home: { section: "home" }, dashboard: { section: "home" },
   share: { section: "share" }, "share-assets": { section: "share", share: "packs" },
   "tiktok-video": { section: "share", share: "videos" }, collections: { section: "share", share: "collections" },
-  campaigns: { section: "share", share: "links" },
+  campaigns: { section: "share", share: "collections" },
   results: { section: "results" }, analytics: { section: "results" },
   earnings: { section: "earnings" }, commission: { section: "earnings" },
   community: { section: "community" },
@@ -182,8 +179,7 @@ export function AffiliateCenter() {
                 </div>
                 {shareTab === "packs" ? <ShareAssets payload={payload} t={t} /> : null}
                 {shareTab === "videos" ? <RunThroughVideos /> : null}
-                {shareTab === "collections" ? <Collections collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
-                {shareTab === "links" ? <Campaigns campaigns={payload.campaigns ?? []} collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
+                {shareTab === "collections" ? <Collections collections={payload.collections ?? []} affiliateCode={payload.affiliate.affiliateCode} refresh={refresh} t={t} /> : null}
               </div>
             ) : null}
             {tab === "results" ? <Analytics payload={payload} setTab={setTab} t={t} /> : null}
@@ -312,7 +308,8 @@ function goalText(t: Translate, goal: AffiliateNextGoal) {
   return t("affiliate.home.goalBeat", { count: goal.target });
 }
 
-function Collections({ collections, refresh, t }: { collections: AffiliateCollection[]; refresh: () => Promise<unknown>; t: Translate }) {
+function Collections({ collections, affiliateCode, refresh, t }: { collections: AffiliateCollection[]; affiliateCode: string; refresh: () => Promise<unknown>; t: Translate }) {
+  const [sharing, setSharing] = useState<AffiliateCollection | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -369,6 +366,13 @@ function Collections({ collections, refresh, t }: { collections: AffiliateCollec
         </CardContent>
       </Card>
       {message ? <Notice>{message}</Notice> : null}
+      <ShareDialog
+        open={Boolean(sharing)}
+        onOpenChange={(open) => { if (!open) setSharing(null); }}
+        title={sharing?.title ?? ""}
+        path={sharing ? `/c/${sharing.slug}` : "/"}
+        affiliateCode={affiliateCode}
+      />
       {collections.length ? (
         <div className="grid gap-4 xl:grid-cols-2">
           {collections.map((collection) => (
@@ -392,6 +396,9 @@ function Collections({ collections, refresh, t }: { collections: AffiliateCollec
                 {collection.itemCount < 5 ? <p className="mt-2 text-xs text-muted-foreground">{t("affiliate.collections.needMore", { count: 5 - collection.itemCount })}</p> : null}
               </CardContent>
               <CardFooter className="flex flex-wrap gap-2">
+                {collection.status === "PUBLISHED" ? (
+                  <Button size="sm" onClick={() => setSharing(collection)}><Share2 /> {t("affiliate.shareDialog.button")}</Button>
+                ) : null}
                 <Button size="sm" variant="outline" onClick={() => void rename(collection)}>{t("affiliate.collections.rename")}</Button>
                 {collection.status === "PUBLISHED" ? (
                   <Button size="sm" variant="outline" onClick={() => void action(collection, "ARCHIVE")}><Archive /> {t("affiliate.collections.archive")}</Button>
@@ -414,115 +421,6 @@ function Collections({ collections, refresh, t }: { collections: AffiliateCollec
         </div>
       ) : (
         <EmptyState icon={<FolderHeart />} title={t("affiliate.collections.emptyTitle")} body={t("affiliate.collections.emptyBody")} action={t("affiliate.collections.browse")} />
-      )}
-    </div>
-  );
-}
-
-function Campaigns({ campaigns, collections, refresh, t }: { campaigns: AffiliateCampaign[]; collections: AffiliateCollection[]; refresh: () => Promise<unknown>; t: Translate }) {
-  const [title, setTitle] = useState("");
-  const [collectionId, setCollectionId] = useState("none");
-  const [channel, setChannel] = useState("WHATSAPP");
-  const [source, setSource] = useState("whatsapp");
-  const [placement, setPlacement] = useState("direct-message");
-  const [message, setMessage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function create(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setMessage(null);
-    try {
-      await affiliateJson("/api/affiliate/campaigns", { method: "POST", body: JSON.stringify({ title, collectionId: collectionId === "none" ? null : collectionId, channel, source, placement }) });
-      setTitle(""); setMessage(t("affiliate.campaigns.created")); await refresh();
-    } catch (caught) { setMessage(errorMessage(caught, t)); } finally { setBusy(false); }
-  }
-
-  return (
-    <div className="space-y-5">
-      <SectionHeading title={t("affiliate.campaigns.title")} body={t("affiliate.campaigns.body")} />
-      <Card>
-        <CardHeader><CardTitle>{t("affiliate.campaigns.new")}</CardTitle></CardHeader>
-        <CardContent>
-          <form onSubmit={create}>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="campaign-title">{t("affiliate.campaigns.titleField")}</FieldLabel>
-                <Input id="campaign-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={t("affiliate.campaigns.titlePlaceholder")} />
-              </Field>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field>
-                  <FieldLabel>{t("affiliate.campaigns.collection")}</FieldLabel>
-                  <Select value={collectionId} onValueChange={setCollectionId}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">{t("affiliate.campaigns.storefront")}</SelectItem>
-                      {collections.map((collection) => <SelectItem key={collection.id} value={collection.id}>{collection.title}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel>{t("affiliate.campaigns.channel")}</FieldLabel>
-                  <Select value={channel} onValueChange={(value) => { setChannel(value); const defaults = campaignDefaults(value); setSource(defaults.source); setPlacement(defaults.placement); }}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>{["WHATSAPP", "STATUS", "TIKTOK", "FACEBOOK"].map((value) => <SelectItem key={value} value={value}>{titleCase(value)}</SelectItem>)}</SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="campaign-source">{t("affiliate.campaigns.source")}</FieldLabel>
-                  <Input id="campaign-source" value={source} onChange={(event) => setSource(event.target.value)} />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="campaign-placement">{t("affiliate.campaigns.placement")}</FieldLabel>
-                  <Input id="campaign-placement" value={placement} onChange={(event) => setPlacement(event.target.value)} />
-                </Field>
-              </div>
-              <Button type="submit" disabled={busy || title.trim().length < 3}>
-                {busy ? <LoaderCircle className="animate-spin" /> : <Megaphone />} {t("affiliate.campaigns.create")}
-              </Button>
-            </FieldGroup>
-          </form>
-        </CardContent>
-      </Card>
-      {message ? <Notice>{message}</Notice> : null}
-      {campaigns.length ? (
-        <Card>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t("affiliate.campaigns.titleField")}</TableHead>
-                  <TableHead>{t("affiliate.campaigns.collection")}</TableHead>
-                  <TableHead>{t("affiliate.campaigns.channel")}</TableHead>
-                  <TableHead>{t("affiliate.campaigns.tracking")}</TableHead>
-                  <TableHead>{t("affiliate.campaigns.status")}</TableHead>
-                  <TableHead>{t("affiliate.campaigns.link")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {campaigns.map((campaign) => (
-                  <TableRow key={campaign.id}>
-                    <TableCell className="font-medium">{campaign.title}</TableCell>
-                    <TableCell>{campaign.collection?.title || t("affiliate.campaigns.storefront")}</TableCell>
-                    <TableCell>{titleCase(campaign.channel)}</TableCell>
-                    <TableCell className="text-muted-foreground">{campaign.source} / {campaign.placement}</TableCell>
-                    <TableCell><Badge variant={campaign.status === "ACTIVE" ? "default" : "outline"}>{campaign.status}</Badge></TableCell>
-                    <TableCell>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!campaign.link}
-                        onClick={() => campaign.link && void copyText(new URL(campaign.link, window.location.origin).toString()).then(() => setMessage(t("affiliate.campaigns.linkCopied", { title: campaign.title })))}
-                      >
-                        <Copy /> {t("affiliate.campaigns.copy")}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      ) : (
-        <EmptyState icon={<Megaphone />} title={t("affiliate.campaigns.emptyTitle")} body={t("affiliate.campaigns.emptyBody")} action={t("affiliate.collections.browse")} />
       )}
     </div>
   );
@@ -651,6 +549,14 @@ function Analytics({ payload, setTab, t }: { payload: AffiliateSessionPayload; s
         </Card>
       )}
       {isNew ? null : <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{rows.map(([label, value]) => <MetricCard key={label} label={label} value={value} />)}</div>}
+      {isNew || !(payload.dashboard?.clickChannels?.length) ? null : (
+        <Card>
+          <CardHeader><CardTitle>{t("affiliate.results.channelsTitle")}</CardTitle><CardDescription>{t("affiliate.results.channelsBody")}</CardDescription></CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-3">
+            {payload.dashboard.clickChannels.slice(0, 3).map((channel) => <MetricLine key={channel.label} label={channel.label} value={t("affiliate.results.clicksCount", { count: channel.count })} />)}
+          </CardContent>
+        </Card>
+      )}
       {isNew ? null : (
         <Card>
           <CardHeader><CardTitle>{t("affiliate.analytics.top")}</CardTitle></CardHeader>
@@ -780,14 +686,7 @@ function CenterMessage({ icon, title, body, action }: { icon: React.ReactNode; t
     </main>
   );
 }
-function campaignDefaults(channel: string) {
-  if (channel === "STATUS") return { source: "whatsapp-status", placement: "status-pack" };
-  if (channel === "TIKTOK") return { source: "tiktok", placement: "link-in-bio" };
-  if (channel === "FACEBOOK") return { source: "facebook", placement: "post" };
-  return { source: "whatsapp", placement: "direct-message" };
-}
 function money(value: number) { return `KSh ${value.toLocaleString("en-KE")}`; }
-function titleCase(value: string) { return value.toLowerCase().replace(/(^|[_-])\w/g, (match) => match.replace(/[_-]/, " ").toUpperCase()); }
 function errorMessage(caught: unknown, t: Translate) { return caught instanceof Error ? caught.message : t("affiliate.actionFailed"); }
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
