@@ -4,6 +4,9 @@ import {
   AFFILIATE_LEVELS,
   affiliateConversionRate,
   affiliateDailySeries,
+  affiliateNextGoal,
+  affiliateWeekComparison,
+  nextPayoutDate,
   affiliateEarningTotals,
   affiliateLevelLabel,
   affiliateOrderCounts,
@@ -97,4 +100,20 @@ test("flow 9: the daily series has one point per Nairobi day, no gaps, and skips
   assert.deepEqual(series[6], { date: "2026-10-27", orders: 2, commission: 500 });
   assert.deepEqual(series[5], { date: "2026-10-26", orders: 1, commission: 100 });
   assert.equal(series.reduce((total, point) => total + point.orders, 0), 3);
+});
+
+test("flow 10: the next payout is the next Monday in Nairobi", () => {
+  assert.equal(nextPayoutDate(new Date("2026-10-27T10:00:00Z")), "2026-11-02"); // Tuesday
+  assert.equal(nextPayoutDate(new Date("2026-10-26T10:00:00Z")), "2026-11-02"); // Monday: next week's
+  assert.equal(nextPayoutDate(new Date("2026-11-01T10:00:00Z")), "2026-11-02"); // Sunday
+  assert.equal(nextPayoutDate(new Date("2026-10-25T22:00:00Z")), "2026-11-02"); // Monday 01:00 in Nairobi
+});
+
+test("flow 11: week comparison and the next small goal", () => {
+  const daily = Array.from({ length: 14 }, (_, index) => ({ date: `d${index}`, orders: index < 7 ? 1 : 2, commission: 0 }));
+  assert.deepEqual(affiliateWeekComparison(daily), { thisWeek: 14, lastWeek: 7 });
+  assert.deepEqual(affiliateNextGoal({ collections: 0, largestCollectionItems: 0, ordersTotal: 0, thisWeek: 0, lastWeek: 0 }), { kind: "createCollection" });
+  assert.deepEqual(affiliateNextGoal({ collections: 1, largestCollectionItems: 2, ordersTotal: 0, thisWeek: 0, lastWeek: 0 }), { kind: "addProducts", count: 3 });
+  assert.deepEqual(affiliateNextGoal({ collections: 1, largestCollectionItems: 6, ordersTotal: 0, thisWeek: 0, lastWeek: 0 }), { kind: "firstOrder" });
+  assert.deepEqual(affiliateNextGoal({ collections: 1, largestCollectionItems: 6, ordersTotal: 5, thisWeek: 3, lastWeek: 4 }), { kind: "beatLastWeek", target: 5 });
 });

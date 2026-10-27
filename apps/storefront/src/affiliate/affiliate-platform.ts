@@ -138,3 +138,41 @@ export function affiliateDailySeries(
   }
   return [...points.values()];
 }
+
+/** The next Monday after `now`, as a Nairobi calendar date. Weekly M-Pesa payouts go out on Mondays. */
+export function nextPayoutDate(now: Date = new Date()): string {
+  const nairobi = new Date(now.getTime() + NAIROBI_OFFSET_MS);
+  const weekday = nairobi.getUTCDay(); // 0 = Sunday ... 1 = Monday
+  const daysAhead = ((8 - weekday) % 7) || 7;
+  return new Date(nairobi.getTime() + daysAhead * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/** Orders in the last 7 days against the 7 days before, from the daily series (oldest first). */
+export function affiliateWeekComparison(daily: AffiliateDailyPoint[]): { thisWeek: number; lastWeek: number } {
+  const sum = (points: AffiliateDailyPoint[]) => points.reduce((total, point) => total + point.orders, 0);
+  return { thisWeek: sum(daily.slice(-7)), lastWeek: sum(daily.slice(-14, -7)) };
+}
+
+export type AffiliateNextGoal =
+  | { kind: "createCollection" }
+  | { kind: "addProducts"; count: number }
+  | { kind: "firstOrder" }
+  | { kind: "beatLastWeek"; target: number };
+
+/** One small next step for the Home page, from the simplest missing thing to the next order target. */
+export function affiliateNextGoal(input: {
+  collections: number;
+  largestCollectionItems: number;
+  ordersTotal: number;
+  thisWeek: number;
+  lastWeek: number;
+  minCollectionItems?: number;
+}): AffiliateNextGoal {
+  const min = input.minCollectionItems ?? 5;
+  if (input.collections === 0) return { kind: "createCollection" };
+  if (input.largestCollectionItems < min && input.ordersTotal === 0) {
+    return { kind: "addProducts", count: min - input.largestCollectionItems };
+  }
+  if (input.ordersTotal === 0) return { kind: "firstOrder" };
+  return { kind: "beatLastWeek", target: Math.max(input.thisWeek, input.lastWeek) + 1 };
+}

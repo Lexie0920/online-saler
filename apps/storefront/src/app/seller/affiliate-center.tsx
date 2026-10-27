@@ -22,6 +22,7 @@ import {
   Trash2,
   Video,
 } from "lucide-react";
+import { LAUNCH_AFFILIATE_COMMISSION_RATE_BPS } from "@online-saler/business-rules";
 import { FormEvent, useEffect, useState } from "react";
 import {
   affiliateJson,
@@ -30,6 +31,7 @@ import {
   type AffiliateSessionPayload,
   useAffiliateSession,
 } from "../../affiliate/affiliate-client";
+import { affiliateNextGoal, affiliateWeekComparison, nextPayoutDate, type AffiliateNextGoal } from "../../affiliate/affiliate-platform";
 import { generateStatusPack } from "../../affiliate/status-pack-generator";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -139,33 +141,110 @@ export function AffiliateCenter() {
 
 function Dashboard({ payload, setTab, t }: { payload: AffiliateSessionPayload; setTab: (tab: CenterTab) => void; t: Translate }) {
   const metrics = payload.dashboard?.metrics;
+  const daily = payload.dashboard?.daily ?? [];
+  const collections = payload.collections ?? [];
+  const [range, setRange] = useState<7 | 30>(7);
+  const isNew = !(metrics?.clicks) && !(metrics?.ordersTotal);
+  const { thisWeek, lastWeek } = affiliateWeekComparison(daily);
+  const points = daily.slice(-range).map((day) => ({ label: day.date.slice(5), value: day.orders }));
+  const goal = affiliateNextGoal({
+    collections: collections.length,
+    largestCollectionItems: Math.max(0, ...collections.map((item) => item.itemCount)),
+    ordersTotal: metrics?.ordersTotal ?? 0,
+    thisWeek,
+    lastWeek,
+  });
+  const readyToPay = payload.dashboard?.commission?.CONFIRMED ?? 0;
+  const exampleSale = 800;
+  const exampleEarn = Math.round((exampleSale * LAUNCH_AFFILIATE_COMMISSION_RATE_BPS) / 10_000);
   const stats = [
-    [t("affiliate.metric.clicks"), String(metrics?.clicks ?? 0)],
-    [t("affiliate.metric.orders"), String(metrics?.ordersTotal ?? 0)],
-    [t("affiliate.metric.sales"), money(metrics?.sales ?? 0)],
-    [t("affiliate.metric.commission"), money(metrics?.commission ?? 0)],
-  ];
+    [t("affiliate.metric.commission"), money(metrics?.commission ?? 0), null],
+    [t("affiliate.metric.orders"), String(metrics?.ordersPaid ?? 0), (metrics?.ordersUnpaid ?? 0) > 0 ? t("affiliate.home.unpaidNote", { count: metrics?.ordersUnpaid ?? 0 }) : null],
+    [t("affiliate.metric.clicks"), String(metrics?.clicks ?? 0), null],
+    [t("affiliate.home.nextPayout"), money(readyToPay), nextPayoutDate()],
+  ] as const;
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{stats.map(([label, value]) => <MetricCard key={label} label={label} value={value} />)}</div>
-      <div className="grid gap-4 xl:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>{homeHeadline(t, isNew, thisWeek, lastWeek)}</CardTitle>
+          <CardDescription>{t("affiliate.dashboard.todayBody")}</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button onClick={() => setTab("tiktok-video")}><Share2 /> {t("affiliate.home.postStatus")}</Button>
+          <Button variant="outline" onClick={() => setTab("collections")}><Plus /> {t("affiliate.dashboard.newCollection")}</Button>
+        </CardContent>
+      </Card>
+
+      {isNew ? (
         <Card>
-          <CardHeader><CardTitle>{t("affiliate.dashboard.today")}</CardTitle><CardDescription>{t("affiliate.dashboard.todayBody")}</CardDescription></CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <Button onClick={() => setTab("tiktok-video")}><Video /> {t("affiliate.dashboard.openVideos")}</Button>
-            <Button variant="outline" onClick={() => setTab("collections")}><Plus /> {t("affiliate.dashboard.newCollection")}</Button>
+          <CardHeader>
+            <CardTitle>{t("affiliate.home.stepsTitle")}</CardTitle>
+            <CardDescription>{t("affiliate.home.exampleEarn", { sale: exampleSale.toLocaleString("en-KE"), earn: exampleEarn.toLocaleString("en-KE") })}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ol className="space-y-2 text-sm">
+              {(["affiliate.home.step1", "affiliate.home.step2", "affiliate.home.step3"] as const).map((key, index) => (
+                <li key={key} className="flex items-start gap-3 rounded-md border bg-muted/40 px-3 py-2">
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">{index + 1}</span>
+                  <span>{t(key)}</span>
+                </li>
+              ))}
+            </ol>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader><CardTitle>{t("affiliate.dashboard.top")}</CardTitle><CardDescription>{t("affiliate.dashboard.topBody")}</CardDescription></CardHeader>
-          <CardContent className="grid gap-2 sm:grid-cols-2">
-            <MetricLine label={t("affiliate.dashboard.topCollection")} value={metrics?.topCollection || t("affiliate.noData")} />
-            <MetricLine label={t("affiliate.dashboard.topProduct")} value={metrics?.topProduct || t("affiliate.noData")} />
-          </CardContent>
-        </Card>
-      </div>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {stats.map(([label, value, note]) => <MetricCard key={label} label={label} value={value} note={note} />)}
+          </div>
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle>{t("affiliate.results.chartTitle")}</CardTitle>
+                <div className="flex gap-1" role="group" aria-label={t("affiliate.results.range")}>
+                  {([7, 30] as const).map((value) => (
+                    <Button key={value} size="sm" variant={range === value ? "default" : "outline"} aria-pressed={range === value} onClick={() => setRange(value)}>
+                      {t(value === 7 ? "affiliate.results.range7" : "affiliate.results.range30")}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <LineChart points={points} ariaLabel={t("affiliate.results.chartAria", { days: range })} formatValue={(value) => t("affiliate.results.ordersCount", { count: value })} />
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("affiliate.home.goalTitle")}</CardTitle>
+          <CardDescription>{goalText(t, goal)}</CardDescription>
+        </CardHeader>
+        <CardFooter>
+          <Button variant="outline" onClick={() => setTab(goal.kind === "createCollection" || goal.kind === "addProducts" ? "collections" : "tiktok-video")}>
+            {goal.kind === "createCollection" || goal.kind === "addProducts" ? t("affiliate.dashboard.newCollection") : t("affiliate.home.postStatus")}
+          </Button>
+        </CardFooter>
+      </Card>
     </div>
   );
+}
+
+function homeHeadline(t: Translate, isNew: boolean, thisWeek: number, lastWeek: number) {
+  if (isNew) return t("affiliate.home.headlineNew");
+  if (thisWeek > lastWeek && thisWeek > 0) return t("affiliate.home.headlineUp", { count: thisWeek });
+  if (thisWeek > 0) return t("affiliate.home.headlineSome", { count: thisWeek });
+  return t("affiliate.home.headlineQuiet");
+}
+
+function goalText(t: Translate, goal: AffiliateNextGoal) {
+  if (goal.kind === "createCollection") return t("affiliate.home.goalCreate");
+  if (goal.kind === "addProducts") return t("affiliate.home.goalAdd", { count: goal.count });
+  if (goal.kind === "firstOrder") return t("affiliate.home.goalFirst");
+  return t("affiliate.home.goalBeat", { count: goal.target });
 }
 
 function Collections({ collections, refresh, t }: { collections: AffiliateCollection[]; refresh: () => Promise<unknown>; t: Translate }) {
@@ -626,8 +705,8 @@ function payoutDay(iso: string) {
   return new Date(new Date(iso).getTime() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
-  return <Card><CardHeader className="pb-2"><CardDescription>{label}</CardDescription><CardTitle className="text-2xl font-semibold">{value}</CardTitle></CardHeader></Card>;
+function MetricCard({ label, value, note }: { label: string; value: string; note?: string | null }) {
+  return <Card><CardHeader className="pb-2"><CardDescription>{label}</CardDescription><CardTitle className="text-2xl font-semibold">{value}</CardTitle>{note ? <p className="text-xs text-muted-foreground">{note}</p> : null}</CardHeader></Card>;
 }
 function MetricLine({ label, value }: { label: string; value: string }) {
   return <div className="rounded-md border bg-muted/60 p-3"><small className="text-muted-foreground">{label}</small><strong className="mt-1 block text-sm font-medium">{value}</strong></div>;
