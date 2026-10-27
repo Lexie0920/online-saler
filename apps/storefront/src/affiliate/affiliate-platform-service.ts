@@ -343,22 +343,9 @@ export async function updateAffiliateCampaignStatus(
 export async function getAffiliateDashboard(session: CustomerSession | null) {
   const affiliate = await requireActiveAffiliate(session);
   const paidOrderStatuses = [OrderStatus.PAID, OrderStatus.FULFILLING, OrderStatus.COMPLETED];
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [clicks, clickTotal, clickSources, orderTotal, orderPaid, commissions, collections, campaigns, payouts, orderSources, recentCommissions, sharedThisWeek, orderedThisWeek, payeePhone] = await Promise.all([
-    // A sample, only to find the top collection and product. The totals below are counted in the database.
-    prisma.affiliateClick.findMany({
-      where: { affiliateId: affiliate.id },
-      select: {
-        productId: true,
-        collectionId: true,
-        collection: { select: { title: true, slug: true } },
-        product: { select: { productCode: true, title: true } },
-      },
-      take: 1000,
-      orderBy: { clickedAt: "desc" },
-    }),
-    prisma.affiliateClick.count({ where: { affiliateId: affiliate.id } }),
-    // Where the clicks came from (WhatsApp, Status, TikTok...), counted in the database.
+  const [top, clickSources, orderTotal, orderPaid, commissions, collections, campaigns, payouts, orderSources, recentCommissions, community, payeePhone] = await Promise.all([
+    topClickTargets(affiliate.id),
+    // Where the clicks came from (WhatsApp, Status, TikTok...), counted in the database. Summed, it is the click total.
     prisma.affiliateClick.groupBy({ by: ["source"], where: { affiliateId: affiliate.id }, _count: { _all: true } }),
     // The same counts the back office shows for this promoter.
     prisma.order.count({ where: { affiliateId: affiliate.id } }),
@@ -395,27 +382,11 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       orderBy: { createdAt: "desc" },
       take: 20,
     }),
-    // Everyone's week in two numbers, for the "Other promoters this week" card. No names.
-    prisma.affiliateClick.groupBy({ by: ["affiliateId"], where: { clickedAt: { gte: weekAgo } } }),
-    prisma.order.groupBy({ by: ["affiliateId"], where: { affiliateId: { not: null }, createdAt: { gte: weekAgo }, status: { in: paidOrderStatuses } } }),
+    communityThisWeek(),
+    // The payout phone is not in the public affiliate fields, so it is read on its own and shown masked.
     prisma.affiliate.findUnique({ where: { id: affiliate.id }, select: { phone: true } }),
   ]);
-  const topCollection = topByKey(clicks.filter((click) => click.collection).map((click) => ({
-    key: click.collection!.slug,
-    label: click.collection!.title,
-  })));
-  const topProduct = topByKey(clicks.filter((click) => click.product).map((click) => ({
-    key: click.product!.productCode,
-    label: click.product!.title || click.product!.productCode,
-  })));
-  const topCollections = topRows(countBy(clicks.filter((click) => click.collection).map((click) => ({
-    key: click.collection!.slug,
-    label: click.collection!.title,
-  }))));
-  const topProducts = topRows(countBy(clicks.filter((click) => click.product).map((click) => ({
-    key: click.product!.productCode,
-    label: click.product!.title || click.product!.productCode,
-  }))));
+  const { topCollections, topProducts } = top;
   const commissionTotals = Object.fromEntries(Object.values(CommissionStatus).map((status) => [
     status,
     commissions.filter((row) => row.status === status).reduce((total, row) => total + row.commissionAmountKsh, 0),
@@ -428,15 +399,15 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     affiliate,
     metrics: {
       // Every recorded click, counted in the database: the same number the back office shows.
-      clicks: clickTotal,
+      clicks: clickSources.reduce((total, row) => total + row._count._all, 0),
       orders: earned.orders,
       ordersTotal: orderCounts.total,
       ordersPaid: orderCounts.paid,
       ordersUnpaid: orderCounts.unpaid,
       sales: earned.sales,
       commission: earned.commission,
-      topCollection: topCollection?.label ?? null,
-      topProduct: topProduct?.label ?? null,
+      topCollection: topCollections[0]?.label ?? null,
+      topProduct: topProducts[0]?.label ?? null,
       collections,
       campaigns,
     },
@@ -454,7 +425,7 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     },
     badges: affiliateBadges(countedTotal, firstCommissionDay !== null),
     payoutPhone: maskPhone(payeePhone?.phone),
-    community: { shared: sharedThisWeek.length, gotOrders: orderedThisWeek.length },
+    community,
     recentOrders: recentCommissions.map((row) => ({
       orderNumber: row.order.orderNumber,
       date: row.createdAt.toISOString(),
@@ -593,29 +564,73 @@ function buildCampaignLink(
   return buildAffiliatePath(collectionSlug ? `/c/${collectionSlug}` : "/", affiliateCode, { source, placement, campaign });
 }
 
-function countBy(rows: Array<{ key: string; label: string }>): Array<{ label: string; count: number }> {
-  const counts = new Map<string, { label: string; count: number }>();
-  for (const row of rows) {
-    const current = counts.get(row.key);
-    counts.set(row.key, { label: row.label, count: (current?.count ?? 0) + 1 });
-  }
-  return [...counts.values()];
-}
-
 function countByNullable(sources: Array<string | null>): Array<{ source: string | null; count: number }> {
   const counts = new Map<string | null, number>();
   for (const source of sources) counts.set(source, (counts.get(source) ?? 0) + 1);
   return [...counts.entries()].map(([source, count]) => ({ source, count }));
 }
 
-function topByKey(rows: Array<{ key: string; label: string }>) {
-  const counts = new Map<string, { label: string; count: number }>();
-  for (const row of rows) {
-    const current = counts.get(row.key) ?? { label: row.label, count: 0 };
-    current.count += 1;
-    counts.set(row.key, current);
+/**
+ * The collections and products this promoter's latest 1,000 clicks went to most, top 3 each.
+ * Only the ids are read for the 1,000 clicks; names are looked up for the six winners alone.
+ */
+async function topClickTargets(affiliateId: string) {
+  const clicks = await prisma.affiliateClick.findMany({
+    where: { affiliateId },
+    select: { productId: true, collectionId: true },
+    take: 1000,
+    orderBy: { clickedAt: "desc" },
+  });
+  const collectionCounts = topRows(countIds(clicks.map((click) => click.collectionId)));
+  const productCounts = topRows(countIds(clicks.map((click) => click.productId)));
+  const [collections, products] = await Promise.all([
+    collectionCounts.length
+      ? prisma.collection.findMany({ where: { id: { in: collectionCounts.map((row) => row.id) } }, select: { id: true, title: true } })
+      : [],
+    productCounts.length
+      ? prisma.product.findMany({ where: { id: { in: productCounts.map((row) => row.id) } }, select: { id: true, productCode: true, title: true } })
+      : [],
+  ]);
+  const collectionTitle = new Map(collections.map((collection) => [collection.id, collection.title]));
+  const productTitle = new Map(products.map((product) => [product.id, product.title || product.productCode]));
+  return {
+    topCollections: collectionCounts.flatMap((row) => collectionTitle.has(row.id) ? [{ label: collectionTitle.get(row.id)!, count: row.count }] : []),
+    topProducts: productCounts.flatMap((row) => productTitle.has(row.id) ? [{ label: productTitle.get(row.id)!, count: row.count }] : []),
+  };
+}
+
+/** Counts each id, keeping the order in which ids first appear so ties rank as before. */
+function countIds(ids: Array<string | null>): Array<{ id: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const id of ids) if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+  return [...counts.entries()].map(([id, count]) => ({ id, count }));
+}
+
+const COMMUNITY_CACHE_MS = 10 * 60 * 1000;
+let communityCache: { at: number; value: Promise<{ shared: number; gotOrders: number }> } | null = null;
+
+/**
+ * "Other promoters this week": how many promoters got clicks, and how many got paid orders,
+ * in the last 7 days. It is the same for everyone and reads every click of the week, so it is
+ * counted once and kept for 10 minutes rather than on each promoter's page load.
+ */
+function communityThisWeek(now = Date.now()) {
+  if (!communityCache || now - communityCache.at >= COMMUNITY_CACHE_MS) {
+    const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const value = Promise.all([
+      prisma.affiliateClick.groupBy({ by: ["affiliateId"], where: { clickedAt: { gte: weekAgo } } }),
+      prisma.order.groupBy({
+        by: ["affiliateId"],
+        where: { affiliateId: { not: null }, createdAt: { gte: weekAgo }, status: { in: [OrderStatus.PAID, OrderStatus.FULFILLING, OrderStatus.COMPLETED] } },
+      }),
+    ]).then(([shared, ordered]) => ({ shared: shared.length, gotOrders: ordered.length }));
+    communityCache = { at: now, value };
+    // A failed count is not kept, so the next page load tries again.
+    value.catch(() => {
+      if (communityCache?.value === value) communityCache = null;
+    });
   }
-  return [...counts.values()].sort((a, b) => b.count - a.count)[0] ?? null;
+  return communityCache.value;
 }
 
 // Use only the active affiliate's public name, never customer identity fields.
