@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AFFILIATE_LEVELS,
   affiliateConversionRate,
+  affiliateDailySeries,
   affiliateEarningTotals,
   affiliateLevelLabel,
   affiliateOrderCounts,
@@ -77,4 +78,23 @@ test("affiliate order counts: unpaid is total minus paid and never negative", ()
   assert.deepEqual(affiliateOrderCounts(0, 0), { total: 0, paid: 0, unpaid: 0 });
   assert.deepEqual(affiliateOrderCounts(3, 5), { total: 3, paid: 3, unpaid: 0 });
   assert.deepEqual(affiliateOrderCounts(-2, -1), { total: 0, paid: 0, unpaid: 0 });
+});
+
+test("flow 9: the daily series has one point per Nairobi day, no gaps, and skips rejected commission", () => {
+  const now = new Date("2026-10-27T10:00:00Z");
+  const series = affiliateDailySeries([
+    { status: "PENDING", commissionAmountKsh: 200, createdAt: new Date("2026-10-27T08:00:00Z") },
+    { status: "PAID", commissionAmountKsh: 300, createdAt: new Date("2026-10-27T09:00:00Z") },
+    { status: "REJECTED", commissionAmountKsh: 999, createdAt: new Date("2026-10-27T09:30:00Z") },
+    // 22:30 UTC on the 25th is already the 26th in Nairobi (UTC+3).
+    { status: "CONFIRMED", commissionAmountKsh: 100, createdAt: new Date("2026-10-25T22:30:00Z") },
+    // Older than the window.
+    { status: "PAID", commissionAmountKsh: 500, createdAt: new Date("2026-10-01T09:00:00Z") },
+  ], 7, now);
+  assert.equal(series.length, 7);
+  assert.equal(series[0].date, "2026-10-21");
+  assert.equal(series[6].date, "2026-10-27");
+  assert.deepEqual(series[6], { date: "2026-10-27", orders: 2, commission: 500 });
+  assert.deepEqual(series[5], { date: "2026-10-26", orders: 1, commission: 100 });
+  assert.equal(series.reduce((total, point) => total + point.orders, 0), 3);
 });

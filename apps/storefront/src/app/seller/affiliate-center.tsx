@@ -42,6 +42,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Textarea } from "../../components/ui/textarea";
 import { useStorefrontI18n } from "../../i18n/use-storefront-i18n";
 import { SiteHeader } from "../components/site-header";
+import { bestPoint, EXAMPLE_ORDERS_PER_DAY, LineChart, runningTotal } from "./affiliate-charts";
 import { RunThroughVideos } from "./run-through-videos";
 
 type CenterTab = "dashboard" | "tiktok-video" | "collections" | "campaigns" | "share-assets" | "analytics" | "commission";
@@ -127,7 +128,7 @@ export function AffiliateCenter() {
             {tab === "collections" ? <Collections collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
             {tab === "campaigns" ? <Campaigns campaigns={payload.campaigns ?? []} collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
             {tab === "share-assets" ? <ShareAssets payload={payload} t={t} /> : null}
-            {tab === "analytics" ? <Analytics payload={payload} t={t} /> : null}
+            {tab === "analytics" ? <Analytics payload={payload} setTab={setTab} t={t} /> : null}
             {tab === "commission" ? <Commission payload={payload} t={t} /> : null}
           </section>
         </div>
@@ -469,27 +470,75 @@ function ShareAssets({ payload, t }: { payload: AffiliateSessionPayload; t: Tran
   );
 }
 
-function Analytics({ payload, t }: { payload: AffiliateSessionPayload; t: Translate }) {
+function Analytics({ payload, setTab, t }: { payload: AffiliateSessionPayload; setTab: (tab: CenterTab) => void; t: Translate }) {
   const metrics = payload.dashboard?.metrics;
+  const daily = payload.dashboard?.daily ?? [];
+  const [range, setRange] = useState<7 | 30>(7);
+  const isNew = !(metrics?.clicks) && !(metrics?.ordersTotal);
+  const shown = daily.slice(-range);
+  const points = shown.map((day) => ({ label: day.date.slice(5), value: day.orders }));
+  const best = bestPoint(points);
   const rows = [
     [t("affiliate.metric.clicks"), String(metrics?.clicks ?? 0)],
-    [t("affiliate.metric.ordersTotal"), String(metrics?.ordersTotal ?? 0)],
-    [t("affiliate.metric.ordersPaid"), String(metrics?.ordersPaid ?? 0)],
-    [t("affiliate.metric.ordersUnpaid"), String(metrics?.ordersUnpaid ?? 0)],
+    [t("affiliate.metric.orders"), String(metrics?.orders ?? 0)],
     [t("affiliate.metric.sales"), money(metrics?.sales ?? 0)],
     [t("affiliate.metric.commission"), money(metrics?.commission ?? 0)],
   ];
+  const unpaid = metrics?.ordersUnpaid ?? 0;
   return (
     <div className="space-y-5">
       <SectionHeading title={t("affiliate.analytics.title")} body={t("affiliate.analytics.body")} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{rows.map(([label, value]) => <MetricCard key={label} label={label} value={value} />)}</div>
-      <Card>
-        <CardHeader><CardTitle>{t("affiliate.analytics.top")}</CardTitle></CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-2">
-          <MetricLine label={t("affiliate.analytics.topCollection")} value={metrics?.topCollection || t("affiliate.noData")} />
-          <MetricLine label={t("affiliate.analytics.topProduct")} value={metrics?.topProduct || t("affiliate.noData")} />
-        </CardContent>
-      </Card>
+      {isNew ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2"><Badge variant="outline">{t("affiliate.results.example")}</Badge></div>
+            <CardTitle>{t("affiliate.results.exampleTitle")}</CardTitle>
+            <CardDescription>{t("affiliate.results.exampleBody")}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <LineChart
+              muted
+              markBest={false}
+              ariaLabel={t("affiliate.results.exampleAria")}
+              formatValue={(value) => String(value)}
+              points={EXAMPLE_ORDERS_PER_DAY.map((value, index) => ({ label: t("affiliate.results.exampleDay", { day: index + 1 }), value }))}
+            />
+            <Button onClick={() => setTab("tiktok-video")}><Share2 /> {t("affiliate.results.goShare")}</Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>{t("affiliate.results.chartTitle")}</CardTitle>
+              <div className="flex gap-1" role="group" aria-label={t("affiliate.results.range")}>
+                {([7, 30] as const).map((value) => (
+                  <Button key={value} size="sm" variant={range === value ? "default" : "outline"} aria-pressed={range === value} onClick={() => setRange(value)}>
+                    {t(value === 7 ? "affiliate.results.range7" : "affiliate.results.range30")}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <CardDescription>
+              {best >= 0 ? t("affiliate.results.bestDay", { date: points[best].label, count: points[best].value }) : t("affiliate.results.noOrdersYet")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <LineChart points={points} ariaLabel={t("affiliate.results.chartAria", { days: range })} formatValue={(value) => t("affiliate.results.ordersCount", { count: value })} />
+            {unpaid > 0 ? <p className="mt-3 text-sm text-muted-foreground">{t("affiliate.results.unpaid", { count: unpaid })}</p> : null}
+          </CardContent>
+        </Card>
+      )}
+      {isNew ? null : <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{rows.map(([label, value]) => <MetricCard key={label} label={label} value={value} />)}</div>}
+      {isNew ? null : (
+        <Card>
+          <CardHeader><CardTitle>{t("affiliate.analytics.top")}</CardTitle></CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            <MetricLine label={t("affiliate.analytics.topCollection")} value={metrics?.topCollection || t("affiliate.noData")} />
+            <MetricLine label={t("affiliate.analytics.topProduct")} value={metrics?.topProduct || t("affiliate.noData")} />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -497,6 +546,10 @@ function Analytics({ payload, t }: { payload: AffiliateSessionPayload; t: Transl
 function Commission({ payload, t }: { payload: AffiliateSessionPayload; t: Translate }) {
   const totals = payload.dashboard?.commission ?? {};
   const payouts = payload.dashboard?.payouts ?? [];
+  const daily = payload.dashboard?.daily ?? [];
+  const hasEarnings = Object.values(totals).some((value) => value > 0) || payouts.length > 0;
+  const running = runningTotal(daily.map((day) => day.commission));
+  const cumulative = daily.map((day, index) => ({ label: day.date.slice(5), value: running[index] }));
   const states = [
     ["PENDING", t("affiliate.commission.pending"), <CircleDollarSign key="pending" />],
     ["CONFIRMED", t("affiliate.commission.confirmed"), <CircleDollarSign key="confirmed" />],
@@ -506,14 +559,37 @@ function Commission({ payload, t }: { payload: AffiliateSessionPayload; t: Trans
   return (
     <div className="space-y-5">
       <SectionHeading title={t("affiliate.commission.title")} body={t("affiliate.commission.body")} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {states.map(([status, label, icon]) => (
+      {hasEarnings ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("affiliate.earnings.chartTitle")}</CardTitle>
+            <CardDescription>{t("affiliate.earnings.chartBody", { amount: (running[running.length - 1] ?? 0).toLocaleString("en-KE") })}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <LineChart
+              markBest={false}
+              points={cumulative}
+              ariaLabel={t("affiliate.earnings.chartAria")}
+              formatValue={(value) => money(value)}
+            />
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("affiliate.earnings.newTitle")}</CardTitle>
+            <CardDescription>{t("affiliate.earnings.newBody")}</CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+      {hasEarnings ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {states.filter(([status]) => status !== "REJECTED" || (totals.REJECTED ?? 0) > 0).map(([status, label, icon]) => (
           <Card key={status}>
             <CardHeader className="pb-2"><CardDescription className="flex items-center gap-2">{icon}{label}</CardDescription></CardHeader>
             <CardContent><strong className="text-xl font-semibold">{money(totals[status] ?? 0)}</strong></CardContent>
           </Card>
         ))}
-      </div>
+      </div> : null}
       <Card>
         <CardHeader>
           <CardTitle>{t("affiliate.commission.historyTitle")}</CardTitle>

@@ -15,6 +15,7 @@ import {
 import type { CustomerSession } from "../auth/customer-auth";
 import {
   COLLECTION_MAX_ITEMS,
+  affiliateDailySeries,
   affiliateEarningTotals,
   affiliateOrderCounts,
   buildAffiliatePath,
@@ -332,7 +333,7 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     prisma.order.count({ where: { affiliateId: affiliate.id, status: { in: paidOrderStatuses } } }),
     prisma.commission.findMany({
       where: { affiliateId: affiliate.id },
-      select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true },
+      select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true, createdAt: true },
     }),
     prisma.collection.count({ where: { affiliateId: affiliate.id } }),
     prisma.campaign.count({ where: { affiliateId: affiliate.id } }),
@@ -375,6 +376,8 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       campaigns,
     },
     commission: commissionTotals,
+    // One point per Nairobi day, for the order and earnings charts.
+    daily: affiliateDailySeries(commissions, 30),
     payouts: payouts.map((payout) => ({
       id: payout.id,
       amountKsh: payout.amountKsh,

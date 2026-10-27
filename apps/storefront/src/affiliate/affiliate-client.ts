@@ -66,6 +66,8 @@ export type AffiliateDashboard = {
     campaigns: number;
   };
   commission: Record<string, number>;
+  /** Last 30 Nairobi days, oldest first: orders and commission earned per day. */
+  daily?: Array<{ date: string; orders: number; commission: number }>;
   /** Weekly M-Pesa payouts already sent, newest first. */
   payouts?: AffiliatePayout[];
 };

@@ -98,3 +98,43 @@ export function affiliateLevelLabel(level: string): string {
   const match = /^LEVEL_([123])$/.exec(level);
   return match ? `Level ${match[1]}` : "Level 1";
 }
+
+export type AffiliateDailyPoint = {
+  /** A Nairobi calendar date, e.g. 2026-10-12. */
+  date: string;
+  /** Orders that earn commission (not rejected) credited on that day. */
+  orders: number;
+  /** Commission earned on that day. */
+  commission: number;
+};
+
+const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+function nairobiDay(date: Date): string {
+  return new Date(date.getTime() + NAIROBI_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * One point per Nairobi day for the last `days` days (oldest first, today last),
+ * so the charts on the Results and Earnings pages have no gaps. Uses the same
+ * rows as the totals (rejected commission earns nothing and is left out).
+ */
+export function affiliateDailySeries(
+  commissions: Array<{ status: string; commissionAmountKsh: number; createdAt: Date }>,
+  days: number,
+  now: Date = new Date(),
+): AffiliateDailyPoint[] {
+  const points = new Map<string, AffiliateDailyPoint>();
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = nairobiDay(new Date(now.getTime() - offset * 24 * 60 * 60 * 1000));
+    points.set(date, { date, orders: 0, commission: 0 });
+  }
+  for (const row of commissions) {
+    if (row.status === "REJECTED") continue;
+    const point = points.get(nairobiDay(row.createdAt));
+    if (!point) continue;
+    point.orders += 1;
+    point.commission += row.commissionAmountKsh;
+  }
+  return [...points.values()];
+}
