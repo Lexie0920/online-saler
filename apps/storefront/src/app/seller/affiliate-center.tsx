@@ -20,7 +20,7 @@ import {
   Plus,
   Share2,
   Trash2,
-  Video,
+  Users,
 } from "lucide-react";
 import { LAUNCH_AFFILIATE_COMMISSION_RATE_BPS } from "@online-saler/business-rules";
 import { FormEvent, useEffect, useState } from "react";
@@ -47,30 +47,68 @@ import { SiteHeader } from "../components/site-header";
 import { bestPoint, EXAMPLE_ORDERS_PER_DAY, LineChart, runningTotal } from "./affiliate-charts";
 import { RunThroughVideos } from "./run-through-videos";
 
-type CenterTab = "dashboard" | "tiktok-video" | "collections" | "campaigns" | "share-assets" | "analytics" | "commission";
+/** The five sidebar sections. */
+type CenterSection = "home" | "share" | "results" | "earnings" | "community";
+/** The tabs inside Share. */
+type ShareTab = "packs" | "videos" | "collections" | "links";
+/**
+ * Where a button or an old link wants to go. The old section names keep working
+ * (for example /seller?tab=share-assets), they are mapped onto the five sections below.
+ */
+type CenterTab = "dashboard" | "tiktok-video" | "collections" | "campaigns" | "share-assets" | "analytics" | "commission" | CenterSection;
 type Translate = ReturnType<typeof useStorefrontI18n>["t"];
 
-const tabs: Array<{ id: CenterTab; label: "affiliate.nav.dashboard" | "affiliate.nav.videos" | "affiliate.nav.collections" | "affiliate.nav.campaigns" | "affiliate.nav.assets" | "affiliate.nav.analytics" | "affiliate.nav.commission"; icon: React.ReactNode }> = [
-  { id: "dashboard", label: "affiliate.nav.dashboard", icon: <LayoutDashboard /> },
-  { id: "tiktok-video", label: "affiliate.nav.videos", icon: <Video /> },
-  { id: "collections", label: "affiliate.nav.collections", icon: <FolderHeart /> },
-  { id: "campaigns", label: "affiliate.nav.campaigns", icon: <Megaphone /> },
-  { id: "share-assets", label: "affiliate.nav.assets", icon: <BookImage /> },
-  { id: "analytics", label: "affiliate.nav.analytics", icon: <BarChart3 /> },
-  { id: "commission", label: "affiliate.nav.commission", icon: <CircleDollarSign /> },
+const sections: Array<{ id: CenterSection; label: "affiliate.nav.home" | "affiliate.nav.share" | "affiliate.nav.results" | "affiliate.nav.earnings" | "affiliate.nav.community"; icon: React.ReactNode }> = [
+  { id: "home", label: "affiliate.nav.home", icon: <LayoutDashboard /> },
+  { id: "share", label: "affiliate.nav.share", icon: <Share2 /> },
+  { id: "results", label: "affiliate.nav.results", icon: <BarChart3 /> },
+  { id: "earnings", label: "affiliate.nav.earnings", icon: <CircleDollarSign /> },
+  { id: "community", label: "affiliate.nav.community", icon: <Users /> },
 ];
+
+const shareTabs: Array<{ id: ShareTab; label: "affiliate.share.packs" | "affiliate.share.videos" | "affiliate.share.collections" | "affiliate.share.links" }> = [
+  { id: "packs", label: "affiliate.share.packs" },
+  { id: "videos", label: "affiliate.share.videos" },
+  { id: "collections", label: "affiliate.share.collections" },
+  { id: "links", label: "affiliate.share.links" },
+];
+
+const destinations: Record<CenterTab, { section: CenterSection; share?: ShareTab }> = {
+  home: { section: "home" }, dashboard: { section: "home" },
+  share: { section: "share" }, "share-assets": { section: "share", share: "packs" },
+  "tiktok-video": { section: "share", share: "videos" }, collections: { section: "share", share: "collections" },
+  campaigns: { section: "share", share: "links" },
+  results: { section: "results" }, analytics: { section: "results" },
+  earnings: { section: "earnings" }, commission: { section: "earnings" },
+  community: { section: "community" },
+};
+
+function destinationFor(value: string | null) {
+  return value && Object.prototype.hasOwnProperty.call(destinations, value) ? destinations[value as CenterTab] : null;
+}
 
 export function AffiliateCenter() {
   const { t } = useStorefrontI18n();
   const searchParams = useSearchParams();
   const { payload, loading, error, refresh } = useAffiliateSession();
-  const requestedTab = searchParams.get("tab") as CenterTab | null;
-  const [tab, setTab] = useState<CenterTab>(tabs.some((item) => item.id === requestedTab) ? requestedTab! : "dashboard");
+  const requestedTab = searchParams.get("tab");
+  const requested = destinationFor(requestedTab);
+  const [tab, setSection] = useState<CenterSection>(requested?.section ?? "home");
+  const [shareTab, setShareTab] = useState<ShareTab>(requested?.share ?? "packs");
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    if (requestedTab && tabs.some((item) => item.id === requestedTab)) setTab(requestedTab);
+    const next = destinationFor(requestedTab);
+    if (!next) return;
+    setSection(next.section);
+    if (next.share) setShareTab(next.share);
   }, [requestedTab]);
+
+  function setTab(target: CenterTab) {
+    const next = destinations[target];
+    setSection(next.section);
+    if (next.share) setShareTab(next.share);
+  }
 
   if (loading && !payload) {
     return <CenterMessage icon={<LoaderCircle className="animate-spin" />} title={t("affiliate.loading.title")} body={t("affiliate.loading.body")} />;
@@ -112,7 +150,7 @@ export function AffiliateCenter() {
 
         <div className="grid gap-6 lg:grid-cols-[13rem_1fr]">
           <nav className="flex gap-1 overflow-x-auto rounded-lg border bg-card p-1.5 lg:flex-col lg:self-start" aria-label={t("affiliate.nav.label")}>
-            {tabs.map((item) => (
+            {sections.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -125,13 +163,40 @@ export function AffiliateCenter() {
             ))}
           </nav>
           <section className="min-w-0">
-            {tab === "dashboard" ? <Dashboard payload={payload} setTab={setTab} t={t} /> : null}
-            {tab === "tiktok-video" ? <RunThroughVideos /> : null}
-            {tab === "collections" ? <Collections collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
-            {tab === "campaigns" ? <Campaigns campaigns={payload.campaigns ?? []} collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
-            {tab === "share-assets" ? <ShareAssets payload={payload} t={t} /> : null}
-            {tab === "analytics" ? <Analytics payload={payload} setTab={setTab} t={t} /> : null}
-            {tab === "commission" ? <Commission payload={payload} t={t} /> : null}
+            {tab === "home" ? <Dashboard payload={payload} setTab={setTab} t={t} /> : null}
+            {tab === "share" ? (
+              <div className="space-y-5">
+                <div className="flex gap-1 overflow-x-auto rounded-lg border bg-card p-1" role="tablist" aria-label={t("affiliate.share.label")}>
+                  {shareTabs.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={shareTab === item.id}
+                      className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition ${shareTab === item.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                      onClick={() => setShareTab(item.id)}
+                    >
+                      {t(item.label)}
+                    </button>
+                  ))}
+                </div>
+                {shareTab === "packs" ? <ShareAssets payload={payload} t={t} /> : null}
+                {shareTab === "videos" ? <RunThroughVideos /> : null}
+                {shareTab === "collections" ? <Collections collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
+                {shareTab === "links" ? <Campaigns campaigns={payload.campaigns ?? []} collections={payload.collections ?? []} refresh={refresh} t={t} /> : null}
+              </div>
+            ) : null}
+            {tab === "results" ? <Analytics payload={payload} setTab={setTab} t={t} /> : null}
+            {tab === "earnings" ? <Commission payload={payload} t={t} /> : null}
+            {tab === "community" ? (
+              <Empty className="border bg-card">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><Users /></EmptyMedia>
+                  <EmptyTitle>{t("affiliate.community.title")}</EmptyTitle>
+                  <EmptyDescription>{t("affiliate.community.soon")}</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
           </section>
         </div>
       </div>
@@ -171,7 +236,7 @@ function Dashboard({ payload, setTab, t }: { payload: AffiliateSessionPayload; s
           <CardDescription>{t("affiliate.dashboard.todayBody")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          <Button onClick={() => setTab("tiktok-video")}><Share2 /> {t("affiliate.home.postStatus")}</Button>
+          <Button onClick={() => setTab(isNew ? "tiktok-video" : "share-assets")}><Share2 /> {t("affiliate.home.postStatus")}</Button>
           <Button variant="outline" onClick={() => setTab("collections")}><Plus /> {t("affiliate.dashboard.newCollection")}</Button>
         </CardContent>
       </Card>
@@ -224,7 +289,7 @@ function Dashboard({ payload, setTab, t }: { payload: AffiliateSessionPayload; s
           <CardDescription>{goalText(t, goal)}</CardDescription>
         </CardHeader>
         <CardFooter>
-          <Button variant="outline" onClick={() => setTab(goal.kind === "createCollection" || goal.kind === "addProducts" ? "collections" : "tiktok-video")}>
+          <Button variant="outline" onClick={() => setTab(goal.kind === "createCollection" || goal.kind === "addProducts" ? "collections" : "share-assets")}>
             {goal.kind === "createCollection" || goal.kind === "addProducts" ? t("affiliate.dashboard.newCollection") : t("affiliate.home.postStatus")}
           </Button>
         </CardFooter>
@@ -467,7 +532,7 @@ function ShareAssets({ payload, t }: { payload: AffiliateSessionPayload; t: Tran
   const collections = payload.collections ?? [];
   const [collectionId, setCollectionId] = useState(collections[0]?.id ?? "");
   const [count, setCount] = useState<"4" | "6" | "8">("4");
-  const [busy, setBusy] = useState<"status" | "video" | null>(null);
+  const [busy, setBusy] = useState<"status" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const collection = collections.find((item) => item.id === collectionId) ?? null;
 
@@ -483,20 +548,6 @@ function ShareAssets({ payload, t }: { payload: AffiliateSessionPayload; t: Tran
       form.set("itemCount", count);
       void fetch("/api/affiliate/assets/status-pack", { method: "POST", body: form }).catch(() => undefined);
       setMessage(t("affiliate.assets.statusDone", { count }));
-    } catch (caught) { setMessage(errorMessage(caught, t)); } finally { setBusy(null); }
-  }
-
-  async function video() {
-    if (!collection) return;
-    setBusy("video"); setMessage(t("affiliate.assets.videoRendering"));
-    try {
-      const response = await fetch("/api/affiliate/assets/tiktok-video", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ collectionId: collection.id }) });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error || t("affiliate.actionFailed"));
-      }
-      downloadBlob(await response.blob(), `direct-loop-${collection.slug}-tiktok.mp4`);
-      setMessage(t("affiliate.assets.videoDone"));
     } catch (caught) { setMessage(errorMessage(caught, t)); } finally { setBusy(null); }
   }
 
@@ -516,7 +567,7 @@ function ShareAssets({ payload, t }: { payload: AffiliateSessionPayload; t: Tran
               </Select>
             </CardContent>
           </Card>
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid gap-4">
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2"><PackageCheck /> {t("affiliate.assets.statusPack")}</CardTitle><CardDescription>{t("affiliate.assets.statusPackBody")}</CardDescription></CardHeader>
               <CardContent className="space-y-3">
@@ -528,15 +579,6 @@ function ShareAssets({ payload, t }: { payload: AffiliateSessionPayload; t: Tran
                   {busy === "status" ? <LoaderCircle className="animate-spin" /> : <Download />} {t("affiliate.assets.downloadZip")}
                 </Button>
                 {collection && collection.itemCount < Number(count) ? <p className="text-xs text-destructive">{t("affiliate.assets.addMore", { count: Number(count) - collection.itemCount })}</p> : null}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2"><Video /> {t("affiliate.assets.video")}</CardTitle><CardDescription>{t("affiliate.assets.videoBody")}</CardDescription></CardHeader>
-              <CardContent>
-                <Button className="w-full" onClick={() => void video()} disabled={Boolean(busy) || !collection || collection.itemCount < 5}>
-                  {busy === "video" ? <LoaderCircle className="animate-spin" /> : <Video />} {t("affiliate.assets.renderVideo")}
-                </Button>
-                {collection && collection.itemCount < 5 ? <p className="mt-2 text-xs text-destructive">{t("affiliate.assets.videoNeeds")}</p> : null}
               </CardContent>
             </Card>
           </div>
