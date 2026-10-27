@@ -52,33 +52,48 @@ export function NewArrivals({ affiliateCode, collections, refresh }: { affiliate
       {!items && !error ? <div className="flex h-32 items-center justify-center"><LoaderCircle className="animate-spin" /></div> : null}
       {items && !items.length ? <p className="text-sm text-muted-foreground">{t("affiliate.newArrivals.empty")}</p> : null}
       {items?.length ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((item) => (
-            <Card key={item.code} className="overflow-hidden">
-              <img src={item.image} alt="" loading="lazy" className="aspect-square w-full object-cover" />
-              <CardHeader>
-                <CardTitle className="text-base">{item.title}</CardTitle>
-                <CardDescription>KSh {item.price.toLocaleString("en-KE")} · {item.size}</CardDescription>
-              </CardHeader>
-              <CardContent className="flex items-center justify-between gap-2">
-                <strong className="text-sm font-medium">{t("affiliate.newArrivals.earn", { amount: item.earnKsh.toLocaleString("en-KE") })}</strong>
-                <Button size="sm" onClick={() => setSharing(item)}><Share2 /> {t("affiliate.shareDialog.button")}</Button>
-              </CardContent>
-              {collections.length ? (
-                <CardFooter>
-                  <select
-                    className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
-                    aria-label={t("affiliate.newArrivals.addTo")}
-                    value=""
-                    onChange={(event) => void addToCollection(item, event.target.value)}
-                  >
-                    <option value="">{t("affiliate.newArrivals.addTo")}</option>
-                    {collections.filter((collection) => collection.status !== "ARCHIVED").map((collection) => <option key={collection.id} value={collection.id}>{collection.title}</option>)}
-                  </select>
-                </CardFooter>
-              ) : null}
-            </Card>
-          ))}
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
+          {items.map((item) => {
+            const pickable = collections.filter((collection) => collection.status !== "ARCHIVED");
+            const picker = (className: string) => (
+              <select
+                className={className}
+                aria-label={t("affiliate.newArrivals.addTo")}
+                value=""
+                onChange={(event) => void addToCollection(item, event.target.value)}
+              >
+                <option value="">{t("affiliate.newArrivals.addTo")}</option>
+                {pickable.map((collection) => <option key={collection.id} value={collection.id}>{collection.title}</option>)}
+              </select>
+            );
+            return (
+              <Card key={item.code} className="overflow-hidden pt-0 max-sm:gap-2">
+                <div className="relative">
+                  <img src={item.image} alt="" loading="lazy" className="aspect-[3/4] w-full object-cover sm:aspect-square" />
+                  {/* Phone: a small round "+" on the picture. The select sits on top of it, invisible, so a tap opens the list of collections. */}
+                  {collections.length ? (
+                    <span className="absolute bottom-2 right-2 flex size-8 items-center justify-center rounded-full bg-background text-lg leading-none shadow sm:hidden">
+                      <span aria-hidden="true">+</span>
+                      {picker("absolute inset-0 size-full cursor-pointer opacity-0")}
+                    </span>
+                  ) : null}
+                </div>
+                <CardHeader className="max-sm:px-2.5">
+                  <CardTitle className="truncate max-sm:text-sm">{item.title}</CardTitle>
+                  <CardDescription className="max-sm:text-xs">KSh {item.price.toLocaleString("en-KE")} · {item.size}</CardDescription>
+                </CardHeader>
+                <CardContent className="flex items-center justify-between gap-2 max-sm:flex-col max-sm:items-stretch max-sm:px-2.5">
+                  <strong className="text-sm font-medium max-sm:text-xs max-sm:text-green-700">{t("affiliate.newArrivals.earn", { amount: item.earnKsh.toLocaleString("en-KE") })}</strong>
+                  <Button size="sm" className="max-sm:h-10 max-sm:w-full" onClick={() => setSharing(item)}><Share2 /> {t("affiliate.shareDialog.button")}</Button>
+                </CardContent>
+                {collections.length ? (
+                  <CardFooter className="hidden sm:flex">
+                    {picker("w-full rounded-md border bg-background px-2 py-1.5 text-sm")}
+                  </CardFooter>
+                ) : null}
+              </Card>
+            );
+          })}
         </div>
       ) : null}
       <ShareDialog

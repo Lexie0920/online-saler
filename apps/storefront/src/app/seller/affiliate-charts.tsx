@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef, type ReactNode } from "react";
+
 /**
  * A small line chart for the Affiliate Center (plain SVG, no chart library).
  * It draws one line, marks the best day, and has a text summary for screen readers.
@@ -17,6 +19,7 @@ export function LineChart({
   markBest = true,
   muted = false,
   dashed = false,
+  swipeHint,
 }: {
   points: ChartPoint[];
   ariaLabel: string;
@@ -25,6 +28,8 @@ export function LineChart({
   /** Greyed out, for the labelled example shown to new promoters. */
   muted?: boolean;
   dashed?: boolean;
+  /** Shown on phones above the chart, e.g. "Swipe the chart sideways". */
+  swipeHint?: string;
 }) {
   if (points.length < 2) return null;
   const max = Math.max(1, ...points.map((point) => point.value));
@@ -38,6 +43,7 @@ export function LineChart({
   const first = points[0];
   const last = points[points.length - 1];
   return (
+    <ScrollChart minWidth={480} resetKey={`${points.length}-${last.label}`} hint={swipeHint}>
     <figure className="m-0">
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -76,6 +82,7 @@ export function LineChart({
         )}
       </svg>
     </figure>
+    </ScrollChart>
   );
 }
 
@@ -104,4 +111,24 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export function dayLabel(date: string, days: number): string {
   if (days > 7) return date.slice(5);
   return WEEKDAYS[new Date(`${date}T00:00:00Z`).getUTCDay()];
+}
+
+/**
+ * Keeps a chart at a readable width. On a phone the chart is wider than the screen and can be swiped sideways,
+ * starting at the newest day on the right, so the text and dots do not shrink to nothing.
+ */
+export function ScrollChart({ minWidth, resetKey, hint, children }: { minWidth: number; resetKey: string | number; hint?: string; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = box.current;
+    if (element) element.scrollLeft = element.scrollWidth;
+  }, [resetKey]);
+  return (
+    <div>
+      {hint ? <p className="mb-1 text-xs text-muted-foreground sm:hidden">{hint}</p> : null}
+      <div ref={box} className="overflow-x-auto overscroll-x-contain">
+        <div style={{ minWidth }} className="w-full">{children}</div>
+      </div>
+    </div>
+  );
 }
