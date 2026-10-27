@@ -13,7 +13,6 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { downloadCsv, payoutListFileName, toCsv } from "@/lib/csv-download";
 import { cn } from "@/lib/utils";
 import { t } from "@/i18n/runtime";
 
@@ -245,7 +244,6 @@ export function AffiliateCenterPage({
   }), [accessToken]);
   const canEdit = hasPermission("action.affiliate.edit");
   const canApprove = hasPermission("action.affiliate.approve");
-  const canExport = hasPermission("action.affiliate.export");
   const [summary, setSummary] = useState<Summary | null>(null);
   const [affiliates, setAffiliates] = useState<AffiliateRow[]>([]);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -404,23 +402,6 @@ export function AffiliateCenterPage({
     }, actionName === "confirm" ? t("佣金已确认。") : actionName === "reject" ? t("佣金已驳回。") : t("已保存外部付款记录及凭证说明。"));
   }
 
-  async function exportPayouts() {
-    if (!adminUserId) return;
-    setError("");
-    setMessage("");
-    try {
-      const rows = await request<Array<Record<string, unknown>>>("/operations/affiliate/payout-export", { query: { adminUserId } });
-      if (rows.length === 0) {
-        setMessage(t("目前没有待付款的佣金，没有生成文件。"));
-        return;
-      }
-      downloadCsv(payoutListFileName(), toCsv(rows));
-      setMessage(t("付款清单已下载：{count} 笔。", { count: rows.length }));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("导出付款清单失败。"));
-    }
-  }
-
   async function copy(value: string, key: string) {
     await navigator.clipboard.writeText(value);
     setCopied(key);
@@ -460,12 +441,6 @@ export function AffiliateCenterPage({
         description={meta.description}
         action={
           <div className="flex gap-2">
-            {canExport ? (
-              <Button variant="outline" onClick={() => void exportPayouts()}>
-                
-                {t("导出付款清单")}
-              </Button>
-            ) : null}
             <Button variant="outline" disabled={busy} onClick={() => void load()}>
               <RefreshCwIcon data-icon="inline-start" />
               

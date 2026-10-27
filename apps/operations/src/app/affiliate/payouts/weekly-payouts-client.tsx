@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, DownloadIcon, RefreshCwIcon, WalletCardsIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, RefreshCwIcon, WalletCardsIcon } from "lucide-react";
 
 import { useOperationsSession } from "@/components/admin/operations-access-provider";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatKsh, formatMoment, operationsRequester } from "@/lib/operations-request";
 import { t } from "@/i18n/runtime";
 import { MpesaBulkPanel, type PayoutBatch } from "./mpesa-bulk-panel";
+import { PayoutExportPanel, downloadPayoutExport } from "./payout-export-panel";
 
 /**
  * 周结付款 — the Monday M-Pesa run (owner, 2026-10-14, "做法一").
@@ -156,15 +157,25 @@ export function WeeklyPayoutsPage() {
     }
   }
 
-  function downloadCsv() {
+  async function exportEarlier() {
     if (!sheet) return;
-    const blob = new Blob([sheet.csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `payouts-${sheet.week.firstDay}.csv`;
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setError("");
+    setNotice("");
+    try {
+      const result = await downloadPayoutExport(accessToken, {
+        scope: "earlier",
+        week: sheet.week.firstDay,
+        status: "pending",
+        includeAffiliate: true,
+        includeRider: true,
+        format: "summary"
+      });
+      setNotice(result
+        ? t("已导出更早未付的款项：{people} 人，{amount}。", { people: result.summary.people, amount: formatKsh(result.summary.amountKsh) })
+        : t("更早的周没有可导出的待付款项。"));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("导出失败，请刷新后再试。"));
+    }
   }
 
   const codeReady = MPESA_CODE.test(code) && /[A-Z]/.test(code);
@@ -202,19 +213,26 @@ export function WeeklyPayoutsPage() {
             <Button variant="outline" size="sm" disabled={loading} onClick={() => void load(week)}>
               <RefreshCwIcon className="size-4" /> {loading ? t("读取中…") : t("刷新")}
             </Button>
-            <Button variant="outline" size="sm" disabled={!sheet?.rows.length} onClick={downloadCsv}>
-              <DownloadIcon className="size-4" /> {t("导出 CSV")}
-            </Button>
+            <PayoutExportPanel accessToken={accessToken} week={week} disabled={loading} />
           </div>
         </CardHeader>
         {sheet ? (
           <CardContent className="flex flex-col gap-3">
+            {sheet.awaitingConfirmation.count ? (
+              <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                {t("先处理：另有 {count} 笔佣金（{amount}）已过 3 天退货期但还没确认，确认后才会出现在确认当周的付款表里。", {
+                  count: sheet.awaitingConfirmation.count,
+                  amount: formatKsh(sheet.awaitingConfirmation.amountKsh)
+                })}{" "}
+                <Link href="/affiliate/commissions/pending" className="underline">{t("去确认佣金")}</Link>
+              </p>
+            ) : null}
             <div className="text-sm font-medium">
               {t("{from} 至 {to}", { from: sheet.week.firstDay, to: sheet.week.lastDay })}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {metrics.map(([label, value, hint]) => (
-                <div key={label} className="rounded-md border p-3">
+                <div key={label} className={`rounded-md border p-3 ${label === t("骑手费") && sheet.totals.riderKsh === 0 ? "opacity-60" : ""}`}>
                   <div className="text-muted-foreground text-xs">{label}</div>
                   <div className="text-lg font-semibold">{value}</div>
                   {hint ? <div className="text-muted-foreground text-xs">{hint}</div> : null}
@@ -228,16 +246,8 @@ export function WeeklyPayoutsPage() {
                   commissionCount: sheet.earlierUnpaid.commissionCount,
                   rider: formatKsh(sheet.earlierUnpaid.riderFeeKsh),
                   riderCount: sheet.earlierUnpaid.riderFeeCount
-                })}
-              </p>
-            ) : null}
-            {sheet.awaitingConfirmation.count ? (
-              <p className="text-muted-foreground text-sm">
-                {t("另有 {count} 笔佣金（{amount}）已过 3 天退货期但还没确认，确认后会出现在确认当周的付款表里。", {
-                  count: sheet.awaitingConfirmation.count,
-                  amount: formatKsh(sheet.awaitingConfirmation.amountKsh)
                 })}{" "}
-                <Link href="/affiliate/commissions/pending" className="underline">{t("去确认佣金")}</Link>
+                <button type="button" className="underline" onClick={() => void exportEarlier()}>{t("导出这些")}</button>
               </p>
             ) : null}
           </CardContent>
