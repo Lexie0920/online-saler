@@ -106,6 +106,8 @@ export type AffiliateDailyPoint = {
   orders: number;
   /** Commission earned on that day. */
   commission: number;
+  /** Sales (order subtotals) on that day. */
+  sales: number;
 };
 
 const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -120,14 +122,14 @@ function nairobiDay(date: Date): string {
  * rows as the totals (rejected commission earns nothing and is left out).
  */
 export function affiliateDailySeries(
-  commissions: Array<{ status: string; commissionAmountKsh: number; createdAt: Date }>,
+  commissions: Array<{ status: string; commissionAmountKsh: number; orderSubtotalKsh?: number; createdAt: Date }>,
   days: number,
   now: Date = new Date(),
 ): AffiliateDailyPoint[] {
   const points = new Map<string, AffiliateDailyPoint>();
   for (let offset = days - 1; offset >= 0; offset -= 1) {
     const date = nairobiDay(new Date(now.getTime() - offset * 24 * 60 * 60 * 1000));
-    points.set(date, { date, orders: 0, commission: 0 });
+    points.set(date, { date, orders: 0, commission: 0, sales: 0 });
   }
   for (const row of commissions) {
     if (row.status === "REJECTED") continue;
@@ -135,6 +137,7 @@ export function affiliateDailySeries(
     if (!point) continue;
     point.orders += 1;
     point.commission += row.commissionAmountKsh;
+    point.sales += row.orderSubtotalKsh ?? 0;
   }
   return [...points.values()];
 }
@@ -177,27 +180,35 @@ export function affiliateNextGoal(input: {
   return { kind: "beatLastWeek", target: Math.max(input.thisWeek, input.lastWeek) + 1 };
 }
 
-export const SHARE_CHANNELS = ["WHATSAPP", "STATUS", "TIKTOK", "FACEBOOK"] as const;
+export const SHARE_CHANNELS = ["WHATSAPP", "TIKTOK", "INSTAGRAM", "FACEBOOK", "OTHER"] as const;
+/** Channels a link can be tagged with: the ones in the Share dialog, plus WhatsApp Status (videos and Status packs). */
+const TAGGED_CHANNELS = [...SHARE_CHANNELS, "STATUS"] as const;
 export type ShareChannel = (typeof SHARE_CHANNELS)[number];
 
-const SHARE_CHANNEL_TRACKING: Record<ShareChannel, { source: string; placement: string }> = {
+export type TaggedChannel = (typeof TAGGED_CHANNELS)[number];
+
+const SHARE_CHANNEL_TRACKING: Record<TaggedChannel, { source: string; placement: string }> = {
   WHATSAPP: { source: "whatsapp", placement: "direct-message" },
   STATUS: { source: "whatsapp-status", placement: "status-pack" },
   TIKTOK: { source: "tiktok", placement: "link-in-bio" },
+  INSTAGRAM: { source: "instagram", placement: "post" },
   FACEBOOK: { source: "facebook", placement: "post" },
+  OTHER: { source: "other", placement: "share" },
 };
 
 /** A share link for a page, tagged with the channel the promoter picked. No setup step is needed first. */
-export function buildShareLink(path: string, affiliateCode: string, channel: ShareChannel): string {
+export function buildShareLink(path: string, affiliateCode: string, channel: TaggedChannel): string {
   return buildAffiliatePath(path, affiliateCode, { ...SHARE_CHANNEL_TRACKING[channel], campaign: "organic" });
 }
 
 /** Everyday name for a click `source`, for the "where clicks came from" list. */
 export function shareSourceLabel(source: string | null | undefined): string {
-  const known = (Object.entries(SHARE_CHANNEL_TRACKING) as Array<[ShareChannel, { source: string }]>)
+  const names: Record<TaggedChannel, string> = {
+    WHATSAPP: "WhatsApp chats", STATUS: "WhatsApp Status", TIKTOK: "TikTok", INSTAGRAM: "Instagram", FACEBOOK: "Facebook", OTHER: "Other",
+  };
+  const known = (Object.entries(SHARE_CHANNEL_TRACKING) as Array<[TaggedChannel, { source: string }]>)
     .find(([, tracking]) => tracking.source === (source ?? "").toLowerCase());
-  if (!known) return "Other";
-  return { WHATSAPP: "WhatsApp chats", STATUS: "WhatsApp Status", TIKTOK: "TikTok", FACEBOOK: "Facebook" }[known[0]];
+  return known ? names[known[0]] : "Other";
 }
 
 /** Group click counts by everyday channel name, biggest first. Unknown sources are summed as "Other". */
@@ -208,4 +219,67 @@ export function clicksByChannel(rows: Array<{ source: string | null; count: numb
     totals.set(label, (totals.get(label) ?? 0) + row.count);
   }
   return [...totals.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count);
+}
+
+
+/** Monday of the Nairobi week that contains `date`, as YYYY-MM-DD. */
+function nairobiWeekStart(date: Date): string {
+  const nairobi = new Date(date.getTime() + NAIROBI_OFFSET_MS);
+  const back = (nairobi.getUTCDay() + 6) % 7; // days since Monday
+  return new Date(nairobi.getTime() - back * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Commission earned so far, week by week, for the "All time" chart. Only goes up
+ * (rejected commission earns nothing). Oldest week first, up to `weeks` weeks ending this week.
+ */
+export function affiliateWeeklyCumulative(
+  commissions: Array<{ status: string; commissionAmountKsh: number; createdAt: Date }>,
+  weeks = 52,
+  now: Date = new Date(),
+): Array<{ date: string; total: number }> {
+  const earning = commissions.filter((row) => row.status !== "REJECTED");
+  if (!earning.length) return [];
+  const byWeek = new Map<string, number>();
+  for (const row of earning) {
+    const week = nairobiWeekStart(row.createdAt);
+    byWeek.set(week, (byWeek.get(week) ?? 0) + row.commissionAmountKsh);
+  }
+  const thisWeek = nairobiWeekStart(now);
+  const first = [...byWeek.keys()].sort()[0];
+  const out: Array<{ date: string; total: number }> = [];
+  let total = 0;
+  for (let cursor = new Date(`${first}T00:00:00Z`); cursor.toISOString().slice(0, 10) <= thisWeek; cursor = new Date(cursor.getTime() + 7 * 24 * 60 * 60 * 1000)) {
+    const date = cursor.toISOString().slice(0, 10);
+    total += byWeek.get(date) ?? 0;
+    out.push({ date, total });
+  }
+  return out.slice(-weeks);
+}
+
+/** A phone number with the middle hidden, e.g. 0712345123 becomes 07•• ••• 123. */
+export function maskPhone(phone: string | null | undefined): string | null {
+  let digits = (phone ?? "").replace(/\D/g, "");
+  if (digits.startsWith("254") && digits.length === 12) digits = `0${digits.slice(3)}`;
+  if (digits.length < 7) return null;
+  return `${digits.slice(0, 2)}•• ••• ${digits.slice(-3)}`;
+}
+
+export type AffiliateOrderState = "waiting" | "ready" | "paid" | "notCounted";
+
+/** What is happening to one commission, in the four everyday states the promoter sees. */
+export function affiliateOrderState(commissionStatus: string, orderStatus: string): { state: AffiliateOrderState; reason?: "returned" | "cancelled" | "other" } {
+  if (commissionStatus === "PAID") return { state: "paid" };
+  if (commissionStatus === "CONFIRMED") return { state: "ready" };
+  if (commissionStatus === "REJECTED") {
+    if (orderStatus === "REFUNDED") return { state: "notCounted", reason: "returned" };
+    if (orderStatus === "CANCELLED" || orderStatus === "EXPIRED") return { state: "notCounted", reason: "cancelled" };
+    return { state: "notCounted", reason: "other" };
+  }
+  return { state: "waiting" };
+}
+
+/** The biggest few rows by count, for the "top 3" lists. */
+export function topRows<T extends { count: number }>(rows: T[], limit = 3): T[] {
+  return [...rows].sort((a, b) => b.count - a.count).slice(0, limit);
 }

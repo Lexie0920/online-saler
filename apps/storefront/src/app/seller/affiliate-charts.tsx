@@ -8,7 +8,7 @@ export type ChartPoint = { label: string; value: number };
 
 const WIDTH = 640;
 const HEIGHT = 200;
-const PAD = { top: 16, right: 12, bottom: 28, left: 12 };
+const PAD = { top: 24, right: 24, bottom: 28, left: 24 };
 
 export function LineChart({
   points,
@@ -16,6 +16,7 @@ export function LineChart({
   formatValue,
   markBest = true,
   muted = false,
+  dashed = false,
 }: {
   points: ChartPoint[];
   ariaLabel: string;
@@ -23,6 +24,7 @@ export function LineChart({
   markBest?: boolean;
   /** Greyed out, for the labelled example shown to new promoters. */
   muted?: boolean;
+  dashed?: boolean;
 }) {
   if (points.length < 2) return null;
   const max = Math.max(1, ...points.map((point) => point.value));
@@ -45,23 +47,33 @@ export function LineChart({
       >
         <line x1={PAD.left} x2={WIDTH - PAD.right} y1={PAD.top + innerHeight} y2={PAD.top + innerHeight} stroke="currentColor" strokeOpacity="0.2" />
         <path d={area} fill="currentColor" fillOpacity="0.08" />
-        <path d={line} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+        <path d={line} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" strokeDasharray={dashed ? "6 6" : undefined} />
+        {points.length <= 14 && !dashed ? points.map((point, index) => (
+          <circle key={point.label + index} cx={x(index)} cy={y(point.value)} r="4" fill="#fff" stroke="currentColor" strokeWidth="2" />
+        )) : null}
         {best >= 0 ? (
           <g>
-            <circle cx={x(best)} cy={y(points[best].value)} r="5" fill="currentColor" />
+            <circle cx={x(best)} cy={y(points[best].value)} r="6" fill="#16a34a" />
             <text
               x={Math.min(Math.max(x(best), 60), WIDTH - 60)}
               y={Math.max(y(points[best].value) - 10, 12)}
               textAnchor="middle"
-              fontSize="12"
-              fill="currentColor"
+              fontSize="13"
+              fontWeight="600"
+              fill="#15803d"
             >
               {formatValue(points[best].value)}
             </text>
           </g>
         ) : null}
-        <text x={PAD.left} y={HEIGHT - 8} fontSize="11" fill="currentColor" fillOpacity="0.7">{first.label}</text>
-        <text x={WIDTH - PAD.right} y={HEIGHT - 8} fontSize="11" textAnchor="end" fill="currentColor" fillOpacity="0.7">{last.label}</text>
+        {points.length <= 7 ? points.map((point, index) => (
+          <text key={point.label + index} x={x(index)} y={HEIGHT - 8} fontSize="11" textAnchor="middle" fill="currentColor" fillOpacity="0.7">{point.label}</text>
+        )) : (
+          <>
+            <text x={PAD.left} y={HEIGHT - 8} fontSize="11" fill="currentColor" fillOpacity="0.7">{first.label}</text>
+            <text x={WIDTH - PAD.right} y={HEIGHT - 8} fontSize="11" textAnchor="end" fill="currentColor" fillOpacity="0.7">{last.label}</text>
+          </>
+        )}
       </svg>
     </figure>
   );
@@ -85,3 +97,11 @@ export function runningTotal(values: number[]): number[] {
 
 /** A made-up curve for new promoters. It is always drawn muted and labelled Example. */
 export const EXAMPLE_ORDERS_PER_DAY = [0, 0, 1, 0, 1, 2, 1, 3, 2, 4, 3, 5, 4, 6];
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Chart label for a Nairobi date (YYYY-MM-DD): the weekday for a week view, month-day for longer views. */
+export function dayLabel(date: string, days: number): string {
+  if (days > 7) return date.slice(5);
+  return WEEKDAYS[new Date(`${date}T00:00:00Z`).getUTCDay()];
+}

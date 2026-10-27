@@ -5,6 +5,10 @@ import {
   affiliateConversionRate,
   affiliateDailySeries,
   affiliateNextGoal,
+  affiliateOrderState,
+  affiliateWeeklyCumulative,
+  maskPhone,
+  topRows,
   affiliateWeekComparison,
   nextPayoutDate,
   affiliateEarningTotals,
@@ -99,8 +103,8 @@ test("flow 9: the daily series has one point per Nairobi day, no gaps, and skips
   assert.equal(series.length, 7);
   assert.equal(series[0].date, "2026-10-21");
   assert.equal(series[6].date, "2026-10-27");
-  assert.deepEqual(series[6], { date: "2026-10-27", orders: 2, commission: 500 });
-  assert.deepEqual(series[5], { date: "2026-10-26", orders: 1, commission: 100 });
+  assert.deepEqual(series[6], { date: "2026-10-27", orders: 2, commission: 500, sales: 0 });
+  assert.deepEqual(series[5], { date: "2026-10-26", orders: 1, commission: 100, sales: 0 });
   assert.equal(series.reduce((total, point) => total + point.orders, 0), 3);
 });
 
@@ -112,7 +116,7 @@ test("flow 10: the next payout is the next Monday in Nairobi", () => {
 });
 
 test("flow 11: week comparison and the next small goal", () => {
-  const daily = Array.from({ length: 14 }, (_, index) => ({ date: `d${index}`, orders: index < 7 ? 1 : 2, commission: 0 }));
+  const daily = Array.from({ length: 14 }, (_, index) => ({ date: `d${index}`, orders: index < 7 ? 1 : 2, commission: 0, sales: 0 }));
   assert.deepEqual(affiliateWeekComparison(daily), { thisWeek: 14, lastWeek: 7 });
   assert.deepEqual(affiliateNextGoal({ collections: 0, largestCollectionItems: 0, ordersTotal: 0, thisWeek: 0, lastWeek: 0 }), { kind: "createCollection" });
   assert.deepEqual(affiliateNextGoal({ collections: 1, largestCollectionItems: 2, ordersTotal: 0, thisWeek: 0, lastWeek: 0 }), { kind: "addProducts", count: 3 });
@@ -136,4 +140,29 @@ test("flow 13: clicks are grouped by everyday channel name, unknown sources beco
     { label: "WhatsApp chats", count: 5 },
     { label: "Other", count: 3 },
   ]);
+});
+
+test("flow 14: all-time earnings go up week by week and skip rejected commission", () => {
+  const now = new Date("2026-10-27T10:00:00Z"); // Tuesday; the week starts Monday 2026-10-26
+  const points = affiliateWeeklyCumulative([
+    { status: "PAID", commissionAmountKsh: 200, createdAt: new Date("2026-10-07T09:00:00Z") }, // week of 10-05
+    { status: "REJECTED", commissionAmountKsh: 999, createdAt: new Date("2026-10-08T09:00:00Z") },
+    { status: "PENDING", commissionAmountKsh: 300, createdAt: new Date("2026-10-26T09:00:00Z") },
+  ], 52, now);
+  assert.deepEqual(points.map((point) => point.date), ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"]);
+  assert.deepEqual(points.map((point) => point.total), [200, 200, 200, 500]);
+  assert.deepEqual(affiliateWeeklyCumulative([], 52, now), []);
+});
+
+test("flow 15: phone is masked, order states are plain, top rows are the biggest", () => {
+  assert.equal(maskPhone("0712345123"), "07•• ••• 123");
+  assert.equal(maskPhone("+254712345123"), "07•• ••• 123");
+  assert.equal(maskPhone("12"), null);
+  assert.equal(maskPhone(null), null);
+  assert.deepEqual(affiliateOrderState("PENDING", "PAID"), { state: "waiting" });
+  assert.deepEqual(affiliateOrderState("CONFIRMED", "COMPLETED"), { state: "ready" });
+  assert.deepEqual(affiliateOrderState("PAID", "COMPLETED"), { state: "paid" });
+  assert.deepEqual(affiliateOrderState("REJECTED", "REFUNDED"), { state: "notCounted", reason: "returned" });
+  assert.deepEqual(affiliateOrderState("REJECTED", "CANCELLED"), { state: "notCounted", reason: "cancelled" });
+  assert.deepEqual(topRows([{ count: 1 }, { count: 9 }, { count: 4 }, { count: 7 }], 3), [{ count: 9 }, { count: 7 }, { count: 4 }]);
 });
