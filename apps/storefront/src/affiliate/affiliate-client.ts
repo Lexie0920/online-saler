@@ -32,6 +32,9 @@ export type AffiliateCollection = {
   coverImage: string | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   itemCount: number;
+  /** Clicks on this collection's page, and orders that came through it. */
+  clicks?: number;
+  orders?: number;
   products: AffiliateProduct[];
   createdAt: string;
   updatedAt: string;
@@ -50,6 +53,15 @@ export type AffiliateCampaign = {
   link?: string;
 };
 
+export type AffiliateRecentOrder = {
+  orderNumber: string;
+  date: string;
+  amountKsh: number;
+  readyOn: string | null;
+  state: "waiting" | "ready" | "paid" | "notCounted";
+  reason?: "returned" | "cancelled" | "other";
+};
+
 export type AffiliateDashboard = {
   metrics: {
     clicks: number;
@@ -66,6 +78,32 @@ export type AffiliateDashboard = {
     campaigns: number;
   };
   commission: Record<string, number>;
+  /** Last 30 Nairobi days, oldest first: orders and commission earned per day. */
+  /** Clicks by everyday channel name (WhatsApp Status, TikTok...), biggest first. */
+  clickChannels?: Array<{ label: string; count: number }>;
+  daily?: Array<{ date: string; orders: number; commission: number; sales: number }>;
+  topCollections?: Array<{ label: string; count: number }>;
+  topProducts?: Array<{ label: string; count: number }>;
+  /** Orders by the channel they came through, biggest first. */
+  orderChannels?: Array<{ label: string; count: number }>;
+  /** Commission earned so far, week by week since the first order. */
+  allTime?: Array<{ date: string; total: number }>;
+  /** Commission that counts for badges (ready or paid): the running total, and what was added each day and week. */
+  counted?: {
+    total: number;
+    daily: Array<{ date: string; added: number; total: number }>;
+    weekly: Array<{ date: string; added: number; total: number }>;
+    firstCommissionDay: string | null;
+  };
+  badges?: {
+    unlocked: number;
+    badges: Array<{ id: "chipukizi" | "fiti" | "poa" | "moto" | "mkali" | "boss" | "legend"; name: string; thresholdKsh: number; state: "unlocked" | "next" | "locked"; progress: number; remainingKsh: number }>;
+  };
+  /** M-Pesa number with the middle hidden, e.g. 07•• ••• 123. */
+  payoutPhone?: string | null;
+  /** Everyone's week, no names: promoters who shared and promoters who got orders. */
+  community?: { shared: number; gotOrders: number };
+  recentOrders?: AffiliateRecentOrder[];
   /** Weekly M-Pesa payouts already sent, newest first. */
   payouts?: AffiliatePayout[];
 };

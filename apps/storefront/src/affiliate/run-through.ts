@@ -68,11 +68,19 @@ export function runThroughCaption(categoryLabel: string, prices: number[], sizes
   const lowest = Math.min(...prices.filter((price) => price > 0));
   const from = Number.isFinite(lowest) ? ` from KSh ${lowest.toLocaleString("en-KE")}` : "";
   return [
-    `${prices.length} one-of-one ${categoryLabel.toLowerCase()}${from} 🔥`,
+    `Hi! I found ${prices.length} ${categoryLabel.toLowerCase()}${from} 🔥`,
     ...(sizes.length ? [`Sizes: ${runThroughSizes(sizes).join(" · ")}`] : []),
-    "Only one of each. Comment the number you want, or shop through the link in my bio.",
-    "#mitumba #thriftkenya #nairobifashion #kenyatiktok #secondhandfashion",
+    "Only one of each, so if you like one, grab it before it is gone.",
   ].join("\n");
+}
+
+/**
+ * The caption with the promoter's own tracked link at the end. Orders are only
+ * credited when people come through that link, so the caption sends them to it
+ * instead of asking them to comment.
+ */
+export function captionWithLink(caption: string, link: string): string {
+  return `${caption}\nSee them here: ${link}`;
 }
 
 const LETTER_SIZES = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "XXXXL"];

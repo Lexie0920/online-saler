@@ -2,7 +2,9 @@
 
 import { CheckCircle2, Copy, Download, LoaderCircle, RotateCcw, Share2, Video } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { affiliateJson } from "../../affiliate/affiliate-client";
+import { affiliateJson, useAffiliateSession } from "../../affiliate/affiliate-client";
+import { buildShareLink } from "../../affiliate/affiliate-platform";
+import { captionWithLink } from "../../affiliate/run-through";
 import type { RunThroughPlan } from "../../affiliate/run-through-service";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -85,6 +87,12 @@ export function RunThroughVideos() {
 }
 
 function VideoCard({ plan, title, onChanged, t }: { plan: RunThroughPlan; title: string; onChanged?: () => Promise<void> | void; t: Translate }) {
+  // The caption ends with the promoter's own tracked link, tagged as a WhatsApp Status post.
+  const { payload: session } = useAffiliateSession();
+  const affiliateCode = session?.affiliate?.affiliateCode;
+  const caption = affiliateCode && typeof window !== "undefined"
+    ? captionWithLink(plan.caption, new URL(buildShareLink("/", affiliateCode, "STATUS"), window.location.origin).toString())
+    : plan.caption;
   const [making, setMaking] = useState(false);
   const [blobUrl, setBlobUrl] = useState("");
   const [message, setMessage] = useState("");
@@ -172,8 +180,8 @@ function VideoCard({ plan, title, onChanged, t }: { plan: RunThroughPlan; title:
           </div>
         )}
 
-        <Textarea value={plan.caption} readOnly rows={4} className="resize-none text-xs" />
-        <Button variant="outline" className="w-full" onClick={() => void copy(plan.caption, t("affiliate.videos.captionCopied"))}>
+        <Textarea value={caption} readOnly rows={4} className="resize-none text-xs" />
+        <Button variant="outline" className="w-full" onClick={() => void copy(caption, t("affiliate.videos.captionCopied"))}>
           <Copy /> {t("affiliate.videos.copyCaption")}
         </Button>
 

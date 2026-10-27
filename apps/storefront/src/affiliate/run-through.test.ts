@@ -4,6 +4,7 @@ import {
   compareSizes,
   dailyCategories,
   nairobiDay,
+  captionWithLink,
   runThroughCaption,
   runThroughCategoryLabel,
   runThroughSizes,
@@ -50,9 +51,10 @@ test("categories read as plain words", () => {
 
 test("the caption names the count and the lowest price", () => {
   const caption = runThroughCaption("T-Shirts", [350, 250, 0], ["XL", "M", "XL"]);
-  assert.match(caption, /^3 one-of-one t-shirts from KSh 250/);
+  assert.match(caption, /^Hi! I found 3 t-shirts from KSh 250/);
   assert.match(caption, /Sizes: M · XL/);
-  assert.match(caption, /Comment the number you want/);
+  assert.doesNotMatch(caption, /Comment the number/);
+  assert.equal(captionWithLink("Hi!", "https://x.test/?ref=A"), "Hi!\nSee them here: https://x.test/?ref=A");
 });
 
 test("pieces run from the smallest size to the largest", () => {
