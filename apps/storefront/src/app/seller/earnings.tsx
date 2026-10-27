@@ -104,6 +104,7 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
             ariaLabel={t("affiliate.badges.chartAria")}
             nextLabel={nextBadge ? t("affiliate.badges.chartNext", { name: nextBadge.name, amount: nextBadge.thresholdKsh.toLocaleString("en-KE"), remaining: nextBadge.remainingKsh.toLocaleString("en-KE") }) : ""}
             formatMoney={(value) => money(value)}
+            swipeHint={t("affiliate.chart.swipe")}
           />
         </CardContent>
       </Card>
@@ -155,7 +156,7 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
         <CardContent>
           {orders.length ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[34rem] text-sm">
                 <thead><tr className="text-left text-xs text-muted-foreground">
                   <th className="py-1 pr-3 font-normal">{t("affiliate.earnings.colOrder")}</th>
                   <th className="py-1 pr-3 font-normal">{t("affiliate.earnings.colDate")}</th>

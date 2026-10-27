@@ -140,7 +140,7 @@ export function Home({ payload, setTab, t }: { payload: AffiliateSessionPayload;
           </div>
         </CardHeader>
         <CardContent>
-          <LineChart points={points} ariaLabel={t("affiliate.results.chartAria", { days: range })} formatValue={(value) => t("affiliate.results.bestDayLabel", { count: value })} />
+          <LineChart swipeHint={t("affiliate.chart.swipe")} points={points} ariaLabel={t("affiliate.results.chartAria", { days: range })} formatValue={(value) => t("affiliate.results.bestDayLabel", { count: value })} />
         </CardContent>
       </Card>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

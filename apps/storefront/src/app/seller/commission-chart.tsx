@@ -1,5 +1,6 @@
 "use client";
 
+import { ScrollChart } from "./affiliate-charts";
 import { BadgeShield } from "./badge-art";
 
 export type CommissionPoint = { label: string; total: number; added: number };
@@ -25,6 +26,7 @@ export function CommissionChart({
   ariaLabel,
   nextLabel,
   formatMoney,
+  swipeHint,
 }: {
   points: CommissionPoint[];
   marks: BadgeMark[];
@@ -32,6 +34,7 @@ export function CommissionChart({
   ariaLabel: string;
   nextLabel: string;
   formatMoney: (value: number) => string;
+  swipeHint?: string;
 }) {
   if (points.length < 2) return null;
   const last = points[points.length - 1];
@@ -63,6 +66,7 @@ export function CommissionChart({
   const stride = Math.max(1, Math.ceil(points.length / 12));
 
   return (
+    <ScrollChart minWidth={720} resetKey={`${points.length}-${last.label}-${rows}`} hint={swipeHint}>
     <figure className="m-0">
       <svg viewBox={`0 0 ${WIDTH} ${bottom + 34}`} role="img" aria-label={ariaLabel} className="h-auto w-full text-green-600">
         {ticks.map((tick) => (
@@ -116,5 +120,6 @@ export function CommissionChart({
       {/* The same information as plain text, for people using a screen reader. */}
       <figcaption className="sr-only">{points.map((point) => `${point.label}: ${formatMoney(point.total)}`).join(", ")}</figcaption>
     </figure>
+    </ScrollChart>
   );
 }

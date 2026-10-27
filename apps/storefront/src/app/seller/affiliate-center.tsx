@@ -77,6 +77,11 @@ export function AffiliateCenter() {
     if (next.share) setShareTab(next.share);
   }, [requestedTab]);
 
+  // On a phone the section bar scrolls sideways: keep the open section in view.
+  useEffect(() => {
+    document.querySelector('nav[data-affiliate-nav] [aria-current="page"]')?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [tab, payload]);
+
   function setTab(target: CenterTab) {
     const next = destinations[target];
     setSection(next.section);
@@ -123,7 +128,7 @@ export function AffiliateCenter() {
         {notice ? <p className="mb-4 rounded-md border bg-card px-3 py-2 text-sm" role="status">{notice}</p> : null}
 
         <div className="grid gap-6 lg:grid-cols-[13rem_1fr]">
-          <nav className="flex gap-1 overflow-x-auto rounded-lg border bg-card p-1.5 lg:flex-col lg:self-start" aria-label={t("affiliate.nav.label")}>
+          <nav data-affiliate-nav className="flex gap-1 overflow-x-auto rounded-lg border bg-card p-1.5 lg:flex-col lg:self-start" aria-label={t("affiliate.nav.label")}>
             {sections.map((item) => (
               <button
                 key={item.id}

@@ -63,7 +63,7 @@ export function ShareDialog({
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40" />
-        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-xl border bg-background p-5 shadow-lg">
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 space-y-4 overflow-y-auto rounded-xl border bg-background p-5 shadow-lg">
           <div className="flex items-start justify-between gap-3">
             <DialogPrimitive.Title className="text-lg font-semibold">{t("affiliate.shareDialog.title", { title })}</DialogPrimitive.Title>
             <DialogPrimitive.Close className="rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label={t("affiliate.shareDialog.close")}><X className="size-4" /></DialogPrimitive.Close>
@@ -73,7 +73,7 @@ export function ShareDialog({
             <p className="mb-2 text-sm text-muted-foreground">{t("affiliate.shareDialog.channel")}</p>
             <div className="flex flex-wrap gap-2" role="group" aria-label={t("affiliate.shareDialog.channel")}>
               {SHARE_CHANNELS.map((value: ShareChannel) => (
-                <Button key={value} size="sm" className="rounded-full" variant={channel === value ? "default" : "outline"} aria-pressed={channel === value} onClick={() => setChannel(value)}>
+                <Button key={value} size="sm" className="rounded-full max-sm:h-10" variant={channel === value ? "default" : "outline"} aria-pressed={channel === value} onClick={() => setChannel(value)}>
                   {channelNames[value]}
                 </Button>
               ))}

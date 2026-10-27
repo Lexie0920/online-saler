@@ -119,8 +119,8 @@ export function Collections({ collections, affiliateCode, refresh, openStatusPac
                   <div className="flex flex-wrap gap-2">
                     {live ? (
                       <>
-                        <Button size="sm" onClick={() => setSharing(collection)}><Share2 /> {t("affiliate.shareDialog.button")}</Button>
-                        <Button size="sm" variant="outline" onClick={() => openStatusPack(collection.id)}>{t("affiliate.collections.statusPack")}</Button>
+                        <Button size="sm" className="max-sm:h-10" onClick={() => setSharing(collection)}><Share2 /> {t("affiliate.shareDialog.button")}</Button>
+                        <Button size="sm" variant="outline" className="max-sm:h-10" onClick={() => openStatusPack(collection.id)}>{t("affiliate.collections.statusPack")}</Button>
                       </>
                     ) : (
                       <Button size="sm" variant="outline" disabled={busyId === collection.id || (!archived && collection.itemCount < 5)} onClick={() => void action(collection, archived ? "RESTORE" : "PUBLISH")}>
@@ -129,9 +129,9 @@ export function Collections({ collections, affiliateCode, refresh, openStatusPac
                     )}
                   </div>
                   <div className="flex flex-wrap gap-1 text-xs">
-                    <Button size="sm" variant="ghost" onClick={() => void rename(collection)}>{t("affiliate.collections.rename")}</Button>
-                    {live ? <Button size="sm" variant="ghost" onClick={() => void action(collection, "ARCHIVE")}><Archive /> {t("affiliate.collections.archive")}</Button> : null}
-                    <Button size="sm" variant="ghost" className="text-destructive" disabled={busyId === collection.id}
+                    <Button size="sm" variant="ghost" className="max-sm:h-10" onClick={() => void rename(collection)}>{t("affiliate.collections.rename")}</Button>
+                    {live ? <Button size="sm" variant="ghost" className="max-sm:h-10" onClick={() => void action(collection, "ARCHIVE")}><Archive /> {t("affiliate.collections.archive")}</Button> : null}
+                    <Button size="sm" variant="ghost" className="text-destructive max-sm:h-10" disabled={busyId === collection.id}
                       onClick={() => window.confirm(t("affiliate.collections.deleteConfirm", { title: collection.title })) && void action(collection, "DELETE")}>
                       <Trash2 /> {t("affiliate.collections.delete")}
                     </Button>
