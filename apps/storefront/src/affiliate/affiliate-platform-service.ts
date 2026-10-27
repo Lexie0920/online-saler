@@ -15,6 +15,17 @@ import {
 import type { CustomerSession } from "../auth/customer-auth";
 import {
   COLLECTION_MAX_ITEMS,
+  affiliateDailySeries,
+  affiliateOrderState,
+  affiliateWeeklyCumulative,
+  affiliateBadges,
+  affiliateCountedDaily,
+  affiliateCountedTotal,
+  affiliateCountedWeekly,
+  affiliateFirstCommissionDay,
+  maskPhone,
+  topRows,
+  clicksByChannel,
   affiliateEarningTotals,
   affiliateOrderCounts,
   buildAffiliatePath,
@@ -130,7 +141,26 @@ export async function listAffiliateCollections(session: CustomerSession | null) 
     include: collectionInclude,
     orderBy: { updatedAt: "desc" },
   });
-  return collections.map(serializeCollection);
+  // How each collection is doing: clicks on its page, and orders that came through it.
+  const [clickRows, orderRows] = await Promise.all([
+    prisma.affiliateClick.groupBy({ by: ["collectionId"], where: { affiliateId: affiliate.id, collectionId: { not: null } }, _count: { _all: true } }),
+    prisma.affiliateAttribution.findMany({
+      where: { affiliateId: affiliate.id, orderId: { not: null }, click: { collectionId: { not: null } } },
+      select: { click: { select: { collectionId: true } } },
+      take: 5000,
+    }),
+  ]);
+  const clicksBy = new Map(clickRows.map((row) => [row.collectionId, row._count._all]));
+  const ordersBy = new Map<string, number>();
+  for (const row of orderRows) {
+    const id = row.click?.collectionId;
+    if (id) ordersBy.set(id, (ordersBy.get(id) ?? 0) + 1);
+  }
+  return collections.map((collection) => ({
+    ...serializeCollection(collection),
+    clicks: clicksBy.get(collection.id) ?? 0,
+    orders: ordersBy.get(collection.id) ?? 0,
+  }));
 }
 
 export async function createAffiliateCollection(session: CustomerSession | null, input: CollectionInput) {
@@ -313,7 +343,8 @@ export async function updateAffiliateCampaignStatus(
 export async function getAffiliateDashboard(session: CustomerSession | null) {
   const affiliate = await requireActiveAffiliate(session);
   const paidOrderStatuses = [OrderStatus.PAID, OrderStatus.FULFILLING, OrderStatus.COMPLETED];
-  const [clicks, clickTotal, orderTotal, orderPaid, commissions, collections, campaigns, payouts] = await Promise.all([
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [clicks, clickTotal, clickSources, orderTotal, orderPaid, commissions, collections, campaigns, payouts, orderSources, recentCommissions, sharedThisWeek, orderedThisWeek, payeePhone] = await Promise.all([
     // A sample, only to find the top collection and product. The totals below are counted in the database.
     prisma.affiliateClick.findMany({
       where: { affiliateId: affiliate.id },
@@ -327,12 +358,14 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       orderBy: { clickedAt: "desc" },
     }),
     prisma.affiliateClick.count({ where: { affiliateId: affiliate.id } }),
+    // Where the clicks came from (WhatsApp, Status, TikTok...), counted in the database.
+    prisma.affiliateClick.groupBy({ by: ["source"], where: { affiliateId: affiliate.id }, _count: { _all: true } }),
     // The same counts the back office shows for this promoter.
     prisma.order.count({ where: { affiliateId: affiliate.id } }),
     prisma.order.count({ where: { affiliateId: affiliate.id, status: { in: paidOrderStatuses } } }),
     prisma.commission.findMany({
       where: { affiliateId: affiliate.id },
-      select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true },
+      select: { status: true, orderSubtotalKsh: true, commissionAmountKsh: true, createdAt: true, eligibleAt: true, confirmedAt: true },
     }),
     prisma.collection.count({ where: { affiliateId: affiliate.id } }),
     prisma.campaign.count({ where: { affiliateId: affiliate.id } }),
@@ -343,6 +376,29 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       orderBy: { paidAt: "desc" },
       take: 52,
     }),
+    // Which channel each order came through (WhatsApp, Status, TikTok...).
+    prisma.affiliateAttribution.findMany({
+      where: { affiliateId: affiliate.id, orderId: { not: null } },
+      select: { source: true },
+      take: 5000,
+    }),
+    // The latest orders, for the "Your orders" list on Earnings.
+    prisma.commission.findMany({
+      where: { affiliateId: affiliate.id },
+      select: {
+        status: true,
+        commissionAmountKsh: true,
+        createdAt: true,
+        eligibleAt: true,
+        order: { select: { orderNumber: true, status: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    }),
+    // Everyone's week in two numbers, for the "Other promoters this week" card. No names.
+    prisma.affiliateClick.groupBy({ by: ["affiliateId"], where: { clickedAt: { gte: weekAgo } } }),
+    prisma.order.groupBy({ by: ["affiliateId"], where: { affiliateId: { not: null }, createdAt: { gte: weekAgo }, status: { in: paidOrderStatuses } } }),
+    prisma.affiliate.findUnique({ where: { id: affiliate.id }, select: { phone: true } }),
   ]);
   const topCollection = topByKey(clicks.filter((click) => click.collection).map((click) => ({
     key: click.collection!.slug,
@@ -352,11 +408,21 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     key: click.product!.productCode,
     label: click.product!.title || click.product!.productCode,
   })));
+  const topCollections = topRows(countBy(clicks.filter((click) => click.collection).map((click) => ({
+    key: click.collection!.slug,
+    label: click.collection!.title,
+  }))));
+  const topProducts = topRows(countBy(clicks.filter((click) => click.product).map((click) => ({
+    key: click.product!.productCode,
+    label: click.product!.title || click.product!.productCode,
+  }))));
   const commissionTotals = Object.fromEntries(Object.values(CommissionStatus).map((status) => [
     status,
     commissions.filter((row) => row.status === status).reduce((total, row) => total + row.commissionAmountKsh, 0),
   ]));
   const earned = affiliateEarningTotals(commissions);
+  const countedTotal = affiliateCountedTotal(commissions);
+  const firstCommissionDay = affiliateFirstCommissionDay(commissions);
   const orderCounts = affiliateOrderCounts(orderTotal, orderPaid);
   return {
     affiliate,
@@ -375,6 +441,30 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       campaigns,
     },
     commission: commissionTotals,
+    topCollections,
+    topProducts,
+    orderChannels: topRows(clicksByChannel(countByNullable(orderSources.map((row) => row.source)))),
+    allTime: affiliateWeeklyCumulative(commissions),
+    // Commission that counts for badges (ready or paid), and the badges themselves.
+    counted: {
+      total: countedTotal,
+      daily: affiliateCountedDaily(commissions, 30),
+      weekly: affiliateCountedWeekly(commissions),
+      firstCommissionDay,
+    },
+    badges: affiliateBadges(countedTotal, firstCommissionDay !== null),
+    payoutPhone: maskPhone(payeePhone?.phone),
+    community: { shared: sharedThisWeek.length, gotOrders: orderedThisWeek.length },
+    recentOrders: recentCommissions.map((row) => ({
+      orderNumber: row.order.orderNumber,
+      date: row.createdAt.toISOString(),
+      amountKsh: row.commissionAmountKsh,
+      readyOn: row.eligibleAt ? row.eligibleAt.toISOString() : null,
+      ...affiliateOrderState(row.status, row.order.status),
+    })),
+    // One point per Nairobi day, for the order and earnings charts.
+    daily: affiliateDailySeries(commissions, 30),
+    clickChannels: clicksByChannel(clickSources.map((row) => ({ source: row.source, count: row._count._all }))),
     payouts: payouts.map((payout) => ({
       id: payout.id,
       amountKsh: payout.amountKsh,
@@ -501,6 +591,21 @@ function buildCampaignLink(
   campaign: string,
 ): string {
   return buildAffiliatePath(collectionSlug ? `/c/${collectionSlug}` : "/", affiliateCode, { source, placement, campaign });
+}
+
+function countBy(rows: Array<{ key: string; label: string }>): Array<{ label: string; count: number }> {
+  const counts = new Map<string, { label: string; count: number }>();
+  for (const row of rows) {
+    const current = counts.get(row.key);
+    counts.set(row.key, { label: row.label, count: (current?.count ?? 0) + 1 });
+  }
+  return [...counts.values()];
+}
+
+function countByNullable(sources: Array<string | null>): Array<{ source: string | null; count: number }> {
+  const counts = new Map<string | null, number>();
+  for (const source of sources) counts.set(source, (counts.get(source) ?? 0) + 1);
+  return [...counts.entries()].map(([source, count]) => ({ source, count }));
 }
 
 function topByKey(rows: Array<{ key: string; label: string }>) {
