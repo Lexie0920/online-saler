@@ -53,11 +53,13 @@ export type AffiliateCampaign = {
 export type AffiliateDashboard = {
   metrics: {
     clicks: number;
-    views: number;
     orders: number;
+    /** Every order credited to this promoter, how many are paid, how many are not (same as the back office). */
+    ordersTotal: number;
+    ordersPaid: number;
+    ordersUnpaid: number;
     sales: number;
     commission: number;
-    conversionRate: number;
     topCollection: string | null;
     topProduct: string | null;
     collections: number;

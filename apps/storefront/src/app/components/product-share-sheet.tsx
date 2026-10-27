@@ -324,11 +324,11 @@ function AnalyticsPreview({ payload }: { payload: ReturnType<typeof useAffiliate
   if (!metrics) return <p className="text-sm text-muted-foreground">Analytics become available after your first tracked share.</p>;
   const rows = [
     ["Clicks", metrics.clicks.toLocaleString()],
-    ["Views", metrics.views.toLocaleString()],
-    ["Orders", metrics.orders.toLocaleString()],
+    ["Total orders", metrics.ordersTotal.toLocaleString()],
+    ["Paid orders", metrics.ordersPaid.toLocaleString()],
+    ["Unpaid orders", metrics.ordersUnpaid.toLocaleString()],
     ["Sales", `KSh ${metrics.sales.toLocaleString("en-KE")}`],
     ["Commission", `KSh ${metrics.commission.toLocaleString("en-KE")}`],
-    ["Conversion", `${metrics.conversionRate.toFixed(1)}%`],
   ];
   return (
     <div className="space-y-3">

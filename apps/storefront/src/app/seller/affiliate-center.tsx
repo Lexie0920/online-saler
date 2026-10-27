@@ -140,7 +140,7 @@ function Dashboard({ payload, setTab, t }: { payload: AffiliateSessionPayload; s
   const metrics = payload.dashboard?.metrics;
   const stats = [
     [t("affiliate.metric.clicks"), String(metrics?.clicks ?? 0)],
-    [t("affiliate.metric.orders"), String(metrics?.orders ?? 0)],
+    [t("affiliate.metric.orders"), String(metrics?.ordersTotal ?? 0)],
     [t("affiliate.metric.sales"), money(metrics?.sales ?? 0)],
     [t("affiliate.metric.commission"), money(metrics?.commission ?? 0)],
   ];
@@ -473,11 +473,11 @@ function Analytics({ payload, t }: { payload: AffiliateSessionPayload; t: Transl
   const metrics = payload.dashboard?.metrics;
   const rows = [
     [t("affiliate.metric.clicks"), String(metrics?.clicks ?? 0)],
-    [t("affiliate.metric.views"), String(metrics?.views ?? 0)],
-    [t("affiliate.metric.orders"), String(metrics?.orders ?? 0)],
+    [t("affiliate.metric.ordersTotal"), String(metrics?.ordersTotal ?? 0)],
+    [t("affiliate.metric.ordersPaid"), String(metrics?.ordersPaid ?? 0)],
+    [t("affiliate.metric.ordersUnpaid"), String(metrics?.ordersUnpaid ?? 0)],
     [t("affiliate.metric.sales"), money(metrics?.sales ?? 0)],
     [t("affiliate.metric.commission"), money(metrics?.commission ?? 0)],
-    [t("affiliate.metric.conversion"), `${(metrics?.conversionRate ?? 0).toFixed(1)}%`],
   ];
   return (
     <div className="space-y-5">
