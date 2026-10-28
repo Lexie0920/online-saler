@@ -17,6 +17,7 @@ import {
   COLLECTION_MAX_ITEMS,
   affiliateDailySeries,
   affiliateOrderState,
+  affiliateOrderStateCounts,
   affiliateWeeklyCumulative,
   affiliateBadges,
   affiliateCountedDaily,
@@ -369,9 +370,9 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
       select: { source: true },
       take: 5000,
     }),
-    // The latest orders, for the "Your orders" list on Earnings.
+    // Every paid order that counts, newest first, for the "Your orders" list on Earnings (cancelled or returned ones are left out).
     prisma.commission.findMany({
-      where: { affiliateId: affiliate.id },
+      where: { affiliateId: affiliate.id, status: { not: CommissionStatus.REJECTED } },
       select: {
         status: true,
         commissionAmountKsh: true,
@@ -380,7 +381,7 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
         order: { select: { orderNumber: true, status: true } },
       },
       orderBy: { createdAt: "desc" },
-      take: 20,
+      take: 1000,
     }),
     communityThisWeek(),
     // The payout phone is not in the public affiliate fields, so it is read on its own and shown masked.
@@ -426,6 +427,7 @@ export async function getAffiliateDashboard(session: CustomerSession | null) {
     badges: affiliateBadges(countedTotal, firstCommissionDay !== null),
     payoutPhone: maskPhone(payeePhone?.phone),
     community,
+    orderStateCounts: affiliateOrderStateCounts(commissions),
     recentOrders: recentCommissions.map((row) => ({
       orderNumber: row.order.orderNumber,
       date: row.createdAt.toISOString(),

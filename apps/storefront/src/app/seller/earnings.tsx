@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { badgeMarkIndex, nextPayoutDate } from "../../affiliate/affiliate-platform";
+import { AFFILIATE_ORDERS_PAGE_SIZE, badgeMarkIndex, filterAffiliateOrders, nextPayoutDate, type AffiliateOrderFilter } from "../../affiliate/affiliate-platform";
 import type { AffiliateRecentOrder, AffiliateSessionPayload } from "../../affiliate/affiliate-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -18,6 +18,8 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
   const payouts = dashboard?.payouts ?? [];
   const orders = dashboard?.recentOrders ?? [];
   const [range, setRange] = useState<"30" | "all">("30");
+  const [filter, setFilter] = useState<AffiliateOrderFilter>("all");
+  const [visible, setVisible] = useState(AFFILIATE_ORDERS_PAGE_SIZE);
   const hasEarnings = Object.values(totals).some((value) => value > 0) || payouts.length > 0;
   // One line of commission that counts (ready or paid), with the badges where they were unlocked.
   const counted = dashboard?.counted;
@@ -30,6 +32,21 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
     .filter((mark) => mark.index >= 0);
   const nextBadge = badgeState?.badges.find((badge) => badge.state === "next") ?? null;
   const ready = totals.CONFIRMED ?? 0;
+  const stateCounts = dashboard?.orderStateCounts ?? {
+    all: orders.filter((order) => order.state !== "notCounted").length,
+    waiting: orders.filter((order) => order.state === "waiting").length,
+    ready: orders.filter((order) => order.state === "ready").length,
+    paid: orders.filter((order) => order.state === "paid").length,
+  };
+  const matching = filterAffiliateOrders(orders, filter);
+  const shownOrders = matching.slice(0, visible);
+  const moreOrders = Math.min(AFFILIATE_ORDERS_PAGE_SIZE, matching.length - shownOrders.length);
+  const filters = [
+    ["all", "affiliate.earnings.filterAll"],
+    ["waiting", "affiliate.earnings.filterWaiting"],
+    ["ready", "affiliate.earnings.filterReady"],
+    ["paid", "affiliate.earnings.filterPaid"],
+  ] as const;
   const phone = dashboard?.payoutPhone;
   const shortDate = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Africa/Nairobi" });
 
@@ -62,7 +79,7 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
             <CardDescription className="text-primary-foreground/80">{t("affiliate.home.youEarned")}</CardDescription>
             <CardTitle className="text-3xl font-semibold">{money(dashboard?.metrics.commission ?? 0)}</CardTitle>
           </CardHeader>
-          <CardContent className="text-sm text-primary-foreground/80">{t("affiliate.earnings.fromPaidOrders", { count: dashboard?.metrics.ordersPaid ?? 0 })}</CardContent>
+          <CardContent className="text-sm text-primary-foreground/80">{t("affiliate.earnings.totalSinceDay1")}</CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
@@ -152,9 +169,18 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>{t("affiliate.earnings.yourOrders")}</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>{t("affiliate.earnings.yourOrders")}</CardTitle>
+          <div className="flex flex-wrap gap-1 pt-1" role="group" aria-label={t("affiliate.earnings.filterLabel")}>
+            {filters.map(([id, key]) => (
+              <Button key={id} size="sm" variant={filter === id ? "default" : "outline"} aria-pressed={filter === id} onClick={() => { setFilter(id); setVisible(AFFILIATE_ORDERS_PAGE_SIZE); }}>
+                {t(key, { count: stateCounts[id] })}
+              </Button>
+            ))}
+          </div>
+        </CardHeader>
         <CardContent>
-          {orders.length ? (
+          {shownOrders.length ? (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[34rem] text-sm">
                 <thead><tr className="text-left text-xs text-muted-foreground">
@@ -164,7 +190,7 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
                   <th className="py-1 font-normal">{t("affiliate.earnings.colWhat")}</th>
                 </tr></thead>
                 <tbody>
-                  {orders.map((order) => (
+                  {shownOrders.map((order) => (
                     <tr key={order.orderNumber} className="border-t">
                       <td className="py-2 pr-3">#{order.orderNumber}</td>
                       <td className="py-2 pr-3">{shortDate(order.date)}</td>
@@ -174,6 +200,11 @@ export function Earnings({ payload, t }: { payload: AffiliateSessionPayload; t: 
                   ))}
                 </tbody>
               </table>
+              {moreOrders > 0 ? (
+                <div className="pt-3 text-center">
+                  <Button variant="outline" size="sm" onClick={() => setVisible((count) => count + AFFILIATE_ORDERS_PAGE_SIZE)}>{t("affiliate.earnings.showMore", { count: moreOrders })}</Button>
+                </div>
+              ) : null}
             </div>
           ) : <p className="text-sm text-muted-foreground">{t("affiliate.earnings.noOrders")}</p>}
         </CardContent>

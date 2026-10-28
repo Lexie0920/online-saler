@@ -407,6 +407,27 @@ export function affiliateOrderState(commissionStatus: string, orderStatus: strin
   return { state: "waiting" };
 }
 
+export type AffiliateOrderFilter = "all" | "waiting" | "ready" | "paid";
+export const AFFILIATE_ORDERS_PAGE_SIZE = 20;
+
+/** The orders in one tab of the Earnings list. "all" is every order that counts. */
+export function filterAffiliateOrders<T extends { state: AffiliateOrderState }>(orders: T[], filter: AffiliateOrderFilter): T[] {
+  return filter === "all" ? orders.filter((order) => order.state !== "notCounted") : orders.filter((order) => order.state === filter);
+}
+
+/** How many paid orders sit in each stage. Rejected commissions (cancelled or returned orders) are left out. */
+export function affiliateOrderStateCounts(commissions: Array<{ status: string }>): Record<AffiliateOrderFilter, number> {
+  const counts = { all: 0, waiting: 0, ready: 0, paid: 0 };
+  for (const row of commissions) {
+    if (row.status === "PAID") counts.paid += 1;
+    else if (row.status === "CONFIRMED") counts.ready += 1;
+    else if (row.status === "REJECTED") continue;
+    else counts.waiting += 1;
+    counts.all += 1;
+  }
+  return counts;
+}
+
 /** The biggest few rows by count, for the "top 3" lists. */
 export function topRows<T extends { count: number }>(rows: T[], limit = 3): T[] {
   return [...rows].sort((a, b) => b.count - a.count).slice(0, limit);

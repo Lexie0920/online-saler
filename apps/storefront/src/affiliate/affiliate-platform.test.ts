@@ -13,6 +13,8 @@ import {
   affiliateDailySeries,
   affiliateNextGoal,
   affiliateOrderState,
+  affiliateOrderStateCounts,
+  filterAffiliateOrders,
   affiliateWeeklyCumulative,
   maskPhone,
   topRows,
@@ -172,6 +174,16 @@ test("flow 15: phone is masked, order states are plain, top rows are the biggest
   assert.deepEqual(affiliateOrderState("REJECTED", "REFUNDED"), { state: "notCounted", reason: "returned" });
   assert.deepEqual(affiliateOrderState("REJECTED", "CANCELLED"), { state: "notCounted", reason: "cancelled" });
   assert.deepEqual(topRows([{ count: 1 }, { count: 9 }, { count: 4 }, { count: 7 }], 3), [{ count: 9 }, { count: 7 }, { count: 4 }]);
+});
+
+test("flow 15b: the Earnings order tabs count paid orders by stage and leave cancelled or returned ones out", () => {
+  const rows = [{ status: "PENDING" }, { status: "PENDING" }, { status: "CONFIRMED" }, { status: "PAID" }, { status: "PAID" }, { status: "PAID" }, { status: "REJECTED" }];
+  assert.deepEqual(affiliateOrderStateCounts(rows), { all: 6, waiting: 2, ready: 1, paid: 3 });
+  assert.deepEqual(affiliateOrderStateCounts([]), { all: 0, waiting: 0, ready: 0, paid: 0 });
+  const orders = [{ state: "waiting" as const }, { state: "ready" as const }, { state: "paid" as const }, { state: "notCounted" as const }];
+  assert.equal(filterAffiliateOrders(orders, "all").length, 3);
+  assert.deepEqual(filterAffiliateOrders(orders, "ready"), [{ state: "ready" }]);
+  assert.equal(filterAffiliateOrders(orders, "paid").length, 1);
 });
 
 const badgeNow = new Date("2026-10-27T10:00:00Z"); // Tuesday

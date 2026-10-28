@@ -104,6 +104,8 @@ export type AffiliateDashboard = {
   /** Everyone's week, no names: promoters who shared and promoters who got orders. */
   community?: { shared: number; gotOrders: number };
   recentOrders?: AffiliateRecentOrder[];
+  /** Paid orders per stage, counted over all of them (the list above holds at most 1,000). */
+  orderStateCounts?: { all: number; waiting: number; ready: number; paid: number };
   /** Weekly M-Pesa payouts already sent, newest first. */
   payouts?: AffiliatePayout[];
 };
