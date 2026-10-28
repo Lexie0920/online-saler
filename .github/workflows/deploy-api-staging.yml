@@ -32,6 +32,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: deploy-api-staging
+  cancel-in-progress: false
+
 env:
   IMAGE_NAME: api
   MIGRATION_JOB_NAME: online-saler-db-migrate-staging
@@ -49,7 +53,50 @@ env:
   OPENAI_API_KEY_SECRET: STAGING_OPENAI_API_KEY
 
 jobs:
+  freshness:
+    name: Skip if a newer commit is already deployed
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Compare with the deployed commit
+        id: check
+        run: |
+          # Two pushes merged a minute apart can finish out of order; without this the
+          # older commit's run deploys last and silently rolls the service back.
+          DEPLOYED_IMAGE="$(gcloud run services describe "${{ vars.GCP_SERVICE_NAME }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --format "value(spec.template.spec.containers[0].image)" 2>/dev/null || true)"
+          DEPLOYED_SHA="${DEPLOYED_IMAGE##*:}"
+          echo "Deployed image: ${DEPLOYED_IMAGE:-none}"
+
+          if [ -n "${DEPLOYED_SHA}" ] \
+            && [ "${DEPLOYED_SHA}" != "${GITHUB_SHA}" ] \
+            && git merge-base --is-ancestor "${GITHUB_SHA}" "${DEPLOYED_SHA}" 2>/dev/null; then
+            echo "${GITHUB_SHA} is older than the deployed ${DEPLOYED_SHA}; skipping deploy."
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+          fi
+
   deploy:
+    needs: freshness
+    if: needs.freshness.outputs.skip != 'true'
     name: Migrate schema, storage, build and deploy API
     runs-on: ubuntu-latest
 
