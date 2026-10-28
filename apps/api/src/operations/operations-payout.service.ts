@@ -20,23 +20,12 @@ import { OperationsAccessService } from "./operations-access.service";
 import { commissionOrderInclude } from "./operations-affiliate.service";
 import { commissionEligibility } from "./operations-commission-policy";
 import { bulkPhone } from "./mpesa-bulk-format";
-import {
-  EXPORT_ROW_LIMIT,
-  buildExportRows,
-  exportCsv,
-  exportFileName,
-  parseExportOptions,
-  summarizeExport,
-  type ExportInput,
-  type ExportItem,
-  type ExportOptions
-} from "./operations-payout-export";
+import { EXPORT_ROW_LIMIT, buildPayoutList, type ExportItem } from "./operations-payout-export";
 import {
   buildPayoutSheet,
   normalizeMpesaCode,
   payoutSheetCsv,
   payoutWeek,
-  riderPayee,
   selfPaymentMatch,
   type PayeeIdentity,
   type Payer,
@@ -67,7 +56,7 @@ export type Db = Prisma.TransactionClient;
 
 export type PayoutSheetInput = { adminUserId?: string; week?: string };
 
-export type PayoutExportInput = ExportInput & { adminUserId?: string };
+export type PayoutExportInput = { adminUserId?: string; /** "true": only the people and amount, for the button label. */ summaryOnly?: string };
 
 export type MarkPayoutPaidInput = {
   adminUserId?: string;
@@ -198,27 +187,17 @@ export class OperationsPayoutService {
   }
 
   /**
-   * The 导出 panel: one CSV for a week, a date range, everything unpaid, or
-   * everything unpaid from before a week; promoters and riders, unpaid and/or
-   * paid. Read-only. The summary lets the panel show "4 人，KSh 5,703" before
-   * anything is downloaded.
+   * 导出: the payment list. Every confirmed, unpaid promoter commission from every week,
+   * one row per promoter and week. Read-only. With summaryOnly the lines are left out, which
+   * is what the page asks for to show "4 people · KSh 5,703" on the button.
    */
   async exportList(input: PayoutExportInput) {
     await this.access.requirePermission(input.adminUserId, FINANCE_PAYOUT);
-    let options: ExportOptions;
-    try {
-      options = parseExportOptions(input);
-    } catch (error) {
-      throw new BadRequestException(error instanceof Error ? error.message : "Invalid export options.");
-    }
-    const { items, truncated } = await loadExportItems(prisma, options, new Date());
-    const { header, rows } = buildExportRows(items, options.format);
-    return {
-      fileName: exportFileName(options),
-      summary: summarizeExport(items, truncated),
-      lineCount: rows.length,
-      csv: exportCsv(header, rows)
-    };
+    const now = new Date();
+    const { items, truncated } = await loadExportItems(prisma, now);
+    const list = buildPayoutList(items, truncated, now);
+    if (input.summaryOnly === "true") return { fileName: list.fileName, summary: list.summary, lines: [] };
+    return list;
   }
 
   /**
@@ -541,159 +520,34 @@ export async function loadSheet(tx: Db, week: PayoutWeek, now: Date): Promise<{ 
   return { rows, identities };
 }
 
-function attributionWindow(options: ExportOptions): Prisma.DateTimeFilter | undefined {
-  if (!options.start && !options.end) return undefined;
-  return { ...(options.start ? { gte: options.start } : {}), ...(options.end ? { lt: options.end } : {}) };
-}
-
 /**
- * Everything the 导出 panel can list, as flat items. Unpaid commissions pass the
- * same eligibility gate as the weekly sheet (an order with an open return or
- * refund is not payable yet); paid items carry the M-Pesa code they were paid with.
+ * Every promoter commission that is confirmed and not paid, oldest first. They pass the same
+ * eligibility gate as the weekly sheet: an order with an open return or refund is not payable
+ * yet, and a frozen commission is not listed.
  */
-export async function loadExportItems(tx: Db, options: ExportOptions, now: Date): Promise<{ items: ExportItem[]; truncated: boolean }> {
-  const window = attributionWindow(options);
-  const wantPending = options.status !== "paid";
-  const wantPaid = options.status !== "pending";
+export async function loadExportItems(tx: Db, now: Date): Promise<{ items: ExportItem[]; truncated: boolean }> {
+  const commissions = await tx.commission.findMany({
+    where: payableCommissionWhere,
+    include: {
+      affiliate: { include: { customer: { select: { phone: true, email: true } } } },
+      order: { include: commissionOrderInclude }
+    },
+    orderBy: { confirmedAt: "asc" },
+    take: EXPORT_ROW_LIMIT
+  });
   const items: ExportItem[] = [];
-  let truncated = false;
-  const affiliateSelect = { include: { customer: { select: { phone: true, email: true } } } } as const;
-  const feeSelect = {
-    id: true,
-    riderFeeKsh: true,
-    completedAt: true,
-    deliveryRiderId: true,
-    deliveryRiderName: true,
-    deliveryRiderPhone: true,
-    deliveryRider: { select: riderSelect },
-    order: { select: { orderNumber: true, createdAt: true } }
-  } as const;
-
-  if (options.includeAffiliate && wantPending) {
-    const commissions = await tx.commission.findMany({
-      where: { ...payableCommissionWhere, ...(window ? { confirmedAt: window } : {}) },
-      include: { affiliate: affiliateSelect, order: { include: commissionOrderInclude } },
-      orderBy: { confirmedAt: "asc" },
-      take: EXPORT_ROW_LIMIT
+  for (const commission of commissions) {
+    if (commissionEligibility(commission, now).blockingReason) continue;
+    items.push({
+      payeeKey: `affiliate:${commission.affiliateId}`,
+      name: commission.affiliate.displayName,
+      phone: commission.affiliate.phone ?? commission.affiliate.customer?.phone ?? null,
+      orderNumber: commission.order.orderNumber,
+      confirmedAt: commission.confirmedAt,
+      amountKsh: commission.commissionAmountKsh
     });
-    if (commissions.length >= EXPORT_ROW_LIMIT) truncated = true;
-    for (const commission of commissions) {
-      if (commissionEligibility(commission, now).blockingReason) continue;
-      items.push({
-        status: "pending",
-        kind: "COMMISSION",
-        payeeKey: `affiliate:${commission.affiliateId}`,
-        payeeType: "AFFILIATE",
-        name: commission.affiliate.displayName,
-        phone: commission.affiliate.phone ?? commission.affiliate.customer?.phone ?? null,
-        orderNumber: commission.order.orderNumber,
-        orderDate: commission.order.createdAt,
-        attributedAt: commission.confirmedAt,
-        amountKsh: commission.commissionAmountKsh,
-        payoutId: null,
-        paidAt: null,
-        mpesaCode: null
-      });
-    }
   }
-
-  if (options.includeAffiliate && wantPaid) {
-    const commissions = await tx.commission.findMany({
-      where: {
-        status: CommissionStatus.PAID,
-        paidAt: { not: null },
-        commissionAmountKsh: { gt: 0 },
-        ...(window ? { confirmedAt: window } : {})
-      },
-      include: {
-        affiliate: affiliateSelect,
-        order: { select: { orderNumber: true, createdAt: true } },
-        payout: { select: { id: true, mpesaCode: true, paidAt: true } }
-      },
-      orderBy: { confirmedAt: "asc" },
-      take: EXPORT_ROW_LIMIT
-    });
-    if (commissions.length >= EXPORT_ROW_LIMIT) truncated = true;
-    for (const commission of commissions) {
-      items.push({
-        status: "paid",
-        kind: "COMMISSION",
-        payeeKey: `affiliate:${commission.affiliateId}`,
-        payeeType: "AFFILIATE",
-        name: commission.affiliate.displayName,
-        phone: commission.affiliate.phone ?? commission.affiliate.customer?.phone ?? null,
-        orderNumber: commission.order.orderNumber,
-        orderDate: commission.order.createdAt,
-        attributedAt: commission.confirmedAt,
-        amountKsh: commission.commissionAmountKsh,
-        payoutId: commission.payout?.id ?? null,
-        paidAt: commission.payout?.paidAt ?? commission.paidAt,
-        mpesaCode: commission.payout?.mpesaCode ?? null
-      });
-    }
-  }
-
-  if (options.includeRider && wantPending) {
-    const fees = await tx.orderFulfillment.findMany({
-      where: { ...unpaidRiderFeeWhere, ...(window ? { completedAt: window } : {}) },
-      select: feeSelect,
-      orderBy: { completedAt: "asc" },
-      take: EXPORT_ROW_LIMIT
-    });
-    if (fees.length >= EXPORT_ROW_LIMIT) truncated = true;
-    for (const fee of fees) {
-      const payee = riderPayee(fee as unknown as SheetRiderFee);
-      items.push({
-        status: "pending",
-        kind: "RIDER_FEE",
-        payeeKey: payee.key,
-        payeeType: "RIDER",
-        name: payee.name,
-        phone: payee.phone,
-        orderNumber: fee.order.orderNumber,
-        orderDate: fee.order.createdAt,
-        attributedAt: fee.completedAt,
-        amountKsh: fee.riderFeeKsh ?? 0,
-        payoutId: null,
-        paidAt: null,
-        mpesaCode: null
-      });
-    }
-  }
-
-  if (options.includeRider && wantPaid) {
-    const fees = await tx.orderFulfillment.findMany({
-      where: {
-        status: FulfillmentStatus.COMPLETED,
-        riderFeeKsh: { gt: 0 },
-        riderFeePayoutId: { not: null },
-        ...(window ? { completedAt: window } : {})
-      },
-      select: { ...feeSelect, riderFeePayout: { select: { id: true, mpesaCode: true, paidAt: true } } },
-      orderBy: { completedAt: "asc" },
-      take: EXPORT_ROW_LIMIT
-    });
-    if (fees.length >= EXPORT_ROW_LIMIT) truncated = true;
-    for (const fee of fees) {
-      const payee = riderPayee(fee as unknown as SheetRiderFee);
-      items.push({
-        status: "paid",
-        kind: "RIDER_FEE",
-        payeeKey: payee.key,
-        payeeType: "RIDER",
-        name: payee.name,
-        phone: payee.phone,
-        orderNumber: fee.order.orderNumber,
-        orderDate: fee.order.createdAt,
-        attributedAt: fee.completedAt,
-        amountKsh: fee.riderFeeKsh ?? 0,
-        payoutId: fee.riderFeePayout?.id ?? null,
-        paidAt: fee.riderFeePayout?.paidAt ?? null,
-        mpesaCode: fee.riderFeePayout?.mpesaCode ?? null
-      });
-    }
-  }
-  return { items, truncated };
+  return { items, truncated: commissions.length >= EXPORT_ROW_LIMIT };
 }
 
 export async function lockItems(tx: Db, row: Pick<PayoutRow, "items">) {

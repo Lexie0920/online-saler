@@ -27,24 +27,12 @@ export class OperationsPayoutController {
   }
 
   /**
-   * 导出: scope=week|range|all|earlier, status=pending|paid|all, include=affiliate,rider,
-   * format=summary|detail, plus week (any Nairobi date) or from/to (YYYY-MM-DD). Read-only.
+   * 导出: the payment list, every confirmed and unpaid promoter commission from every week.
+   * `summary=true` returns only the people and amount. Read-only.
    */
   @Get("export")
-  async exportList(
-    @Headers("authorization") authorization?: string,
-    @Query("scope") scope?: string,
-    @Query("week") week?: string,
-    @Query("from") from?: string,
-    @Query("to") to?: string,
-    @Query("status") status?: string,
-    @Query("include") include?: string,
-    @Query("format") format?: string
-  ) {
-    return this.payouts.exportList({
-      adminUserId: await this.access.requireAccessToken(authorization),
-      scope, week, from, to, status, include, format
-    });
+  async exportList(@Headers("authorization") authorization?: string, @Query("summary") summary?: string) {
+    return this.payouts.exportList({ adminUserId: await this.access.requireAccessToken(authorization), summaryOnly: summary });
   }
 
   @Post("mark-paid")

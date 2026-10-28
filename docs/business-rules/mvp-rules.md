@@ -184,12 +184,18 @@ Until 2026-09-26 returns were accepted only for those five reasons and within
   themselves. Only SUPER_ADMIN and FINANCE hold `finance.payout`.
 - A commission belongs to the week it was confirmed in; a rider fee belongs to
   the week its delivery was completed with the customer's code.
-- The payment list is exported from one place only, the 导出 panel on 周结付款
-  (read-only, `GET operations/payouts/export`): a week, a date range, everything
-  unpaid, or everything unpaid from before a week; promoters and riders; unpaid,
-  paid or both; one line per person per week or one per order. Paid lines carry
-  the M-Pesa code they were paid with. It does not change any payout or
-  commission state.
+- The payment list is exported from one place only, the 导出付款清单 button on
+  周结付款 (read-only, `GET operations/payouts/export`). It downloads an Excel
+  file (.xlsx, all English) with every promoter commission that is confirmed and
+  not yet paid, from every week, not only the week shown on the page. One row
+  per promoter and week, sorted by promoter name with a promoter's rows together
+  and the oldest week first. A promoter owed for more than one week gets a
+  colour block and a subtotal row (the amount to send in one go); a promoter
+  with one row stays plain. The last row is the total. Rider fees, unconfirmed
+  commissions and paid commissions are not in it, and neither is a commission
+  held back by an open return or refund. A commission leaves the list as soon as
+  its payment is recorded. The file never saves empty: with nobody to pay the
+  button is greyed out. It does not change any payout or commission state.
 - Refunded items revoke the related commission.
 - A cancelled or written-off order reverses its commission: an unconfirmed one
   is rejected, a confirmed one is frozen with a hold reason so it cannot be

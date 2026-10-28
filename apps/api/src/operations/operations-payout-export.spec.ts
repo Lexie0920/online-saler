@@ -1,147 +1,140 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  buildExportRows,
-  exportCsv,
-  exportCsvCell,
-  exportFileName,
-  parseExportOptions,
-  summarizeExport,
-  type ExportItem
+  buildPayoutList,
+  payoutListFileName,
+  phoneNote,
+  weekLabel,
+  type ExportItem,
+  type PayoutListLine
 } from "./operations-payout-export";
 
-const NOW = new Date("2026-10-25T10:00:00.000Z");
+// Wednesday 28 Oct 2026, 10:00 in Nairobi.
+const NOW = new Date("2026-10-28T07:00:00.000Z");
 
 function item(partial: Partial<ExportItem>): ExportItem {
   return {
-    status: "pending",
-    kind: "COMMISSION",
     payeeKey: "affiliate:a1",
-    payeeType: "AFFILIATE",
-    name: "Faith",
-    phone: "254717834529",
+    name: "Faith Njeri",
+    phone: "0717834529",
     orderNumber: "DL-1",
-    orderDate: new Date("2026-10-05T08:00:00.000Z"),
-    attributedAt: new Date("2026-10-14T09:00:00.000Z"),
+    confirmedAt: new Date("2026-10-21T09:00:00.000Z"),
     amountKsh: 100,
-    payoutId: null,
-    paidAt: null,
-    mpesaCode: null,
     ...partial
   };
 }
 
-test("defaults to last week, unpaid, promoters and riders, one line per person", () => {
-  const options = parseExportOptions({}, NOW);
-  assert.equal(options.scope, "week");
-  assert.equal(options.status, "pending");
-  assert.equal(options.format, "summary");
-  assert.equal(options.includeAffiliate && options.includeRider, true);
-  // Today is Sunday 25 Oct (Nairobi); last finished week is Mon 12 – Sun 18 Oct.
-  assert.equal(options.start?.toISOString(), "2026-10-11T21:00:00.000Z");
-  assert.equal(options.end?.toISOString(), "2026-10-18T21:00:00.000Z");
-  assert.equal(exportFileName(options), "payouts-pending-summary-2026-10-12_2026-10-18.csv");
+const OCT_12 = new Date("2026-10-14T09:00:00.000Z");
+const OCT_19 = new Date("2026-10-21T09:00:00.000Z");
+
+test("the file is named after today in Nairobi, and is an .xlsx", () => {
+  assert.equal(payoutListFileName(NOW), "payout-list-2026-10-28.xlsx");
+  // 22:00 UTC on the 27th is already the 28th in Nairobi.
+  assert.equal(payoutListFileName(new Date("2026-10-27T22:00:00.000Z")), "payout-list-2026-10-28.xlsx");
 });
 
-test("a date range is whole Nairobi days, both ends included", () => {
-  const options = parseExportOptions({ scope: "range", from: "2026-09-25", to: "2026-10-25" }, NOW);
-  assert.equal(options.start?.toISOString(), "2026-09-24T21:00:00.000Z");
-  assert.equal(options.end?.toISOString(), "2026-10-25T21:00:00.000Z");
-  assert.equal(options.label, "2026-09-25_2026-10-25");
+test("a week reads 12 Oct–18 Oct, and carries the year only when it is not this year", () => {
+  assert.equal(weekLabel(OCT_12, NOW), "12 Oct–18 Oct");
+  // A week that runs over New Year says the year it ends in.
+  assert.equal(weekLabel(new Date("2025-12-31T09:00:00.000Z"), NOW), "29 Dec–4 Jan 2026");
+  assert.equal(weekLabel(new Date("2025-11-12T09:00:00.000Z"), NOW), "10 Nov–16 Nov 2025");
+  assert.equal(weekLabel(null, NOW), "");
 });
 
-test("all has no window and earlier ends where the chosen week starts", () => {
-  const all = parseExportOptions({ scope: "all" }, NOW);
-  assert.equal(all.start, null);
-  assert.equal(all.end, null);
-  assert.equal(all.label, "all-2026-10-25");
-  const earlier = parseExportOptions({ scope: "earlier", week: "2026-10-14" }, NOW);
-  assert.equal(earlier.start, null);
-  assert.equal(earlier.end?.toISOString(), "2026-10-11T21:00:00.000Z");
+test("a Sunday night in Kenya belongs to that Sunday's week, not Monday's", () => {
+  // 21:30 UTC on Sunday 18 Oct is 00:30 on Monday 19 Oct in Nairobi.
+  assert.equal(weekLabel(new Date("2026-10-18T21:30:00.000Z"), NOW), "19 Oct–25 Oct");
+  assert.equal(weekLabel(new Date("2026-10-18T20:30:00.000Z"), NOW), "12 Oct–18 Oct");
 });
 
-test("refuses choices it cannot honour instead of replacing them", () => {
-  assert.throws(() => parseExportOptions({ scope: "month" }, NOW), /scope/);
-  assert.throws(() => parseExportOptions({ status: "done" }, NOW), /status/);
-  assert.throws(() => parseExportOptions({ format: "xlsx" }, NOW), /format/);
-  assert.throws(() => parseExportOptions({ include: "boss" }, NOW), /include/);
-  assert.throws(() => parseExportOptions({ include: " , " }, NOW), /Choose/);
-  assert.throws(() => parseExportOptions({ scope: "range", from: "2026-10-05" }, NOW), /to must/);
-  assert.throws(() => parseExportOptions({ scope: "range", from: "2026-10-30", to: "2026-10-05" }, NOW), /not be after/);
-  assert.throws(() => parseExportOptions({ scope: "range", from: "2026-02-31", to: "2026-03-05" }, NOW), /real calendar date/);
+test("phone notes are in English, and a usable number has none", () => {
+  assert.equal(phoneNote("0717834529"), "");
+  assert.equal(phoneNote("+254 717 834 529"), "");
+  assert.equal(phoneNote(null), "No phone number");
+  assert.equal(phoneNote("  "), "No phone number");
+  assert.equal(phoneNote("12345"), "Phone is not a valid M-Pesa number");
 });
 
-test("summary: one line per person per week, unpaid first, oldest week first, bigger amount first", () => {
-  const items = [
-    item({ payeeKey: "affiliate:a2", name: "Grace", phone: "254723456789", amountKsh: 50, orderNumber: "DL-2" }),
-    item({ amountKsh: 100, orderNumber: "DL-1" }),
-    item({ amountKsh: 200, orderNumber: "DL-3" }),
-    item({ payeeKey: "affiliate:a1", attributedAt: new Date("2026-10-06T09:00:00.000Z"), amountKsh: 70, orderNumber: "DL-0" }),
-    item({ status: "paid", payeeKey: "affiliate:a3", name: "Esther", payoutId: "p1", mpesaCode: "SJK3ABC12X", paidAt: new Date("2026-10-20T09:00:00.000Z"), amountKsh: 300, orderNumber: "DL-9" })
-  ];
-  const { header, rows } = buildExportRows(items, "summary");
-  assert.equal(header.length, rows[0]!.length);
-  assert.deepEqual(rows.map((row) => [row[0], row[2], row[4], row[5], row[6]]), [
-    ["待付", "Faith", 1, 70, "2026-10-05~2026-10-11"],
-    ["待付", "Faith", 2, 300, "2026-10-12~2026-10-18"],
-    ["待付", "Grace", 1, 50, "2026-10-12~2026-10-18"],
-    ["已付", "Esther", 1, 300, "2026-10-12~2026-10-18"]
+test("nothing owed gives an empty list with no total line", () => {
+  const list = buildPayoutList([], false, NOW);
+  assert.deepEqual(list.lines, []);
+  assert.deepEqual(list.summary, { people: 0, rows: 0, orders: 0, amountKsh: 0, phoneProblems: 0, truncated: false });
+});
+
+test("orders of one promoter in one week become one row", () => {
+  const list = buildPayoutList([item({ amountKsh: 100, orderNumber: "DL-1" }), item({ amountKsh: 250, orderNumber: "DL-2" })], false, NOW);
+  assert.deepEqual(list.lines, [
+    { kind: "item", block: null, promoter: "Faith Njeri", phone: "254717834529", week: "19 Oct–25 Oct", orders: 2, amountKsh: 350, note: "" },
+    { kind: "total", people: 1, orders: 2, amountKsh: 350 }
   ]);
-  const paid = rows[3]!;
-  assert.equal(paid[7], "2026-10-20");
-  assert.equal(paid[8], "SJK3ABC12X");
 });
 
-test("a person with no phone, or a phone M-Pesa cannot use, is flagged on unpaid lines only", () => {
-  const { rows } = buildExportRows([
-    item({ payeeKey: "affiliate:a1", name: "NoPhone", phone: null }),
-    item({ payeeKey: "affiliate:a2", name: "BadPhone", phone: "12345" }),
-    item({ payeeKey: "affiliate:a3", name: "Fine" }),
-    item({ status: "paid", payeeKey: "affiliate:a4", name: "PaidNoPhone", phone: null, payoutId: "p", mpesaCode: "SJK3ABC12X", paidAt: new Date("2026-10-20T09:00:00.000Z") })
-  ], "summary");
-  const notes = Object.fromEntries(rows.map((row) => [row[2], row[9]]));
-  assert.equal(notes.NoPhone, "没有手机号");
-  assert.equal(notes.BadPhone, "手机号不是有效的 M-Pesa 号码");
-  assert.equal(notes.Fine, "");
-  assert.equal(notes.PaidNoPhone, "");
+test("a promoter owed for two weeks gets two rows, a colour block and a subtotal; one-row promoters stay plain", () => {
+  const list = buildPayoutList(
+    [
+      item({ payeeKey: "affiliate:g", name: "Grace Wanjiru", phone: "0712000101", confirmedAt: OCT_19, amountKsh: 1200, orderNumber: "DL-5" }),
+      item({ payeeKey: "affiliate:g", name: "Grace Wanjiru", phone: "0712000101", confirmedAt: OCT_12, amountKsh: 900, orderNumber: "DL-4" }),
+      item({ payeeKey: "affiliate:a", name: "Amina Otieno", phone: "0712000103", confirmedAt: OCT_19, amountKsh: 1200, orderNumber: "DL-6" }),
+      item({ payeeKey: "affiliate:f", name: "Faith Njeri", phone: "0712000102", confirmedAt: OCT_12, amountKsh: 500, orderNumber: "DL-7" }),
+      item({ payeeKey: "affiliate:f", name: "Faith Njeri", phone: "0712000102", confirmedAt: OCT_19, amountKsh: 1303, orderNumber: "DL-8" }),
+      item({ payeeKey: "affiliate:k", name: "Kamau Mwangi", phone: null, confirmedAt: OCT_12, amountKsh: 600, orderNumber: "DL-9" })
+    ],
+    false,
+    NOW
+  );
+  const shape = list.lines.map((line) =>
+    line.kind === "item" ? `${line.promoter} | ${line.week} | ${line.amountKsh} | block ${line.block}`
+      : line.kind === "subtotal" ? `SUBTOTAL ${line.promoter} | ${line.orders} | ${line.amountKsh} | block ${line.block} | ${line.note}`
+        : `TOTAL ${line.people} people | ${line.orders} | ${line.amountKsh}`
+  );
+  assert.deepEqual(shape, [
+    "Amina Otieno | 19 Oct–25 Oct | 1200 | block null",
+    "Faith Njeri | 12 Oct–18 Oct | 500 | block 0",
+    "Faith Njeri | 19 Oct–25 Oct | 1303 | block 0",
+    "SUBTOTAL Faith Njeri | 2 | 1803 | block 0 | Send KSh 1,803",
+    "Grace Wanjiru | 12 Oct–18 Oct | 900 | block 1",
+    "Grace Wanjiru | 19 Oct–25 Oct | 1200 | block 1",
+    "SUBTOTAL Grace Wanjiru | 2 | 2100 | block 1 | Send KSh 2,100",
+    "Kamau Mwangi | 12 Oct–18 Oct | 600 | block null",
+    "TOTAL 4 people | 6 | 5703"
+  ]);
+  assert.deepEqual(list.summary, { people: 4, rows: 6, orders: 6, amountKsh: 5703, phoneProblems: 1, truncated: false });
+  const kamau = list.lines.find((line): line is Extract<PayoutListLine, { kind: "item" }> => line.kind === "item" && line.promoter === "Kamau Mwangi");
+  assert.equal(kamau?.note, "No phone number");
+  assert.equal(kamau?.phone, "");
 });
 
-test("detail: one line per order with order date, attributed date and week", () => {
-  const { header, rows } = buildExportRows([item({ kind: "RIDER_FEE", payeeType: "RIDER", payeeKey: "rider:r1", name: "Kamau", amountKsh: 150, orderNumber: "DL-7" })], "detail");
-  assert.equal(header.length, rows[0]!.length);
-  assert.deepEqual(rows[0], ["待付", "骑手", "Kamau", "254717834529", "DL-7", "2026-10-05", "2026-10-14", "2026-10-12~2026-10-18", 150, "", null, ""]);
+test("two different promoters with the same name are not merged", () => {
+  const list = buildPayoutList(
+    [
+      item({ payeeKey: "affiliate:1", name: "Faith Njeri", phone: "0712000001", amountKsh: 100 }),
+      item({ payeeKey: "affiliate:2", name: "Faith Njeri", phone: "0712000002", amountKsh: 200 })
+    ],
+    false,
+    NOW
+  );
+  assert.equal(list.summary.people, 2);
+  assert.equal(list.lines.filter((line) => line.kind === "item").length, 2);
+  assert.equal(list.lines.filter((line) => line.kind === "subtotal").length, 0);
 });
 
-test("the Nairobi day is used, not the UTC day, for dates and weeks", () => {
-  // 22:30 UTC on Sunday 18 Oct is 01:30 Monday 19 Oct in Nairobi: next week.
-  const { rows } = buildExportRows([item({ attributedAt: new Date("2026-10-18T22:30:00.000Z") })], "detail");
-  assert.equal(rows[0]![6], "2026-10-19");
-  assert.equal(rows[0]![7], "2026-10-19~2026-10-25");
+test("a promoter whose phone is only on one order still shows it on every row", () => {
+  const list = buildPayoutList(
+    [item({ phone: null, confirmedAt: OCT_12 }), item({ phone: "0717834529", confirmedAt: OCT_19 })],
+    false,
+    NOW
+  );
+  const rows = list.lines.filter((line): line is Extract<PayoutListLine, { kind: "item" }> => line.kind === "item");
+  assert.deepEqual(rows.map((row) => [row.phone, row.note]), [["254717834529", ""], ["254717834529", ""]]);
+  assert.equal(list.summary.phoneProblems, 0);
 });
 
-test("summary counts people once, even across weeks, and counts people without a phone", () => {
-  const summary = summarizeExport([
-    item({ amountKsh: 100 }),
-    item({ attributedAt: new Date("2026-10-06T09:00:00.000Z"), amountKsh: 50 }),
-    item({ payeeKey: "affiliate:a2", name: "NoPhone", phone: null, amountKsh: 25 }),
-    item({ kind: "RIDER_FEE", payeeType: "RIDER", payeeKey: "rider:r1", name: "Kamau", amountKsh: 10 })
-  ], false);
-  assert.deepEqual(summary, {
-    people: 3,
-    affiliatePeople: 2,
-    riderPeople: 1,
-    amountKsh: 185,
-    itemCount: 4,
-    missingPhonePeople: 1,
-    truncated: false
-  });
+test("the truncation flag is passed on so the page can warn", () => {
+  assert.equal(buildPayoutList([item({})], true, NOW).summary.truncated, true);
 });
 
-test("csv: quotes where needed, defuses formulas, leaves phone numbers alone", () => {
-  assert.equal(exportCsvCell("=HYPERLINK(1)"), "'=HYPERLINK(1)");
-  assert.equal(exportCsvCell("+254717834529"), "+254717834529");
-  assert.equal(exportCsvCell("-cmd"), "'-cmd");
-  assert.equal(exportCsvCell('say "hi", ok'), '"say ""hi"", ok"');
-  assert.equal(exportCsvCell(null), "");
-  assert.equal(exportCsv(["a", "b"], [["x", 1]]), "a,b\nx,1\n");
+test("a name that looks like a spreadsheet formula is only text in the list", () => {
+  const list = buildPayoutList([item({ name: "=HYPERLINK(\"http://x\")" })], false, NOW);
+  const row = list.lines[0];
+  assert.equal(row?.kind === "item" ? row.promoter : "", "=HYPERLINK(\"http://x\")");
 });

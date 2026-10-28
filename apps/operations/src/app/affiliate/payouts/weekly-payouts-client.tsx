@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatKsh, formatMoment, operationsRequester } from "@/lib/operations-request";
 import { t } from "@/i18n/runtime";
 import { MpesaBulkPanel, type PayoutBatch } from "./mpesa-bulk-panel";
-import { PayoutExportPanel, downloadPayoutExport } from "./payout-export-panel";
+import { PayoutExportButton } from "./payout-export-button";
 
 /**
  * 周结付款 — the Monday M-Pesa run (owner, 2026-10-14, "做法一").
@@ -157,27 +157,6 @@ export function WeeklyPayoutsPage() {
     }
   }
 
-  async function exportEarlier() {
-    if (!sheet) return;
-    setError("");
-    setNotice("");
-    try {
-      const result = await downloadPayoutExport(accessToken, {
-        scope: "earlier",
-        week: sheet.week.firstDay,
-        status: "pending",
-        includeAffiliate: true,
-        includeRider: true,
-        format: "summary"
-      });
-      setNotice(result
-        ? t("已导出更早未付的款项：{people} 人，{amount}。", { people: result.summary.people, amount: formatKsh(result.summary.amountKsh) })
-        : t("更早的周没有可导出的待付款项。"));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("导出失败，请刷新后再试。"));
-    }
-  }
-
   const codeReady = MPESA_CODE.test(code) && /[A-Z]/.test(code);
   const metrics: Array<[string, string, string?]> = sheet ? [
     [t("本周应付合计"), formatKsh(sheet.totals.amountKsh), t("{count} 人待付", { count: sheet.totals.people })],
@@ -196,7 +175,7 @@ export function WeeklyPayoutsPage() {
               {t("每周一给上周（周一到周日，内罗毕时间）的推广员佣金和骑手费付款。先用 M-Pesa「Send Money」手动转账，再把短信里的交易号填到这里，系统会把这个人这周的所有款项标为已付。这里不会自动转账。")}
             </CardDescription>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-start gap-2">
             <Button variant="outline" size="sm" disabled={loading || !week} onClick={() => week && goTo(shiftDay(week, -7))}>
               <ChevronLeftIcon className="size-4" /> {t("上一周")}
             </Button>
@@ -213,14 +192,14 @@ export function WeeklyPayoutsPage() {
             <Button variant="outline" size="sm" disabled={loading} onClick={() => void load(week)}>
               <RefreshCwIcon className="size-4" /> {loading ? t("读取中…") : t("刷新")}
             </Button>
-            <PayoutExportPanel accessToken={accessToken} week={week} disabled={loading} />
+            <PayoutExportButton accessToken={accessToken} refreshKey={sheet} disabled={loading} />
           </div>
         </CardHeader>
         {sheet ? (
           <CardContent className="flex flex-col gap-3">
             {sheet.awaitingConfirmation.count ? (
               <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                {t("先处理：另有 {count} 笔佣金（{amount}）已过 3 天退货期但还没确认，确认后才会出现在确认当周的付款表里。", {
+                {t("先处理：另有 {count} 笔佣金（{amount}）已过 3 天退货期但还没确认，确认后才会出现在付款表和导出的付款清单里。", {
                   count: sheet.awaitingConfirmation.count,
                   amount: formatKsh(sheet.awaitingConfirmation.amountKsh)
                 })}{" "}
@@ -246,8 +225,7 @@ export function WeeklyPayoutsPage() {
                   commissionCount: sheet.earlierUnpaid.commissionCount,
                   rider: formatKsh(sheet.earlierUnpaid.riderFeeKsh),
                   riderCount: sheet.earlierUnpaid.riderFeeCount
-                })}{" "}
-                <button type="button" className="underline" onClick={() => void exportEarlier()}>{t("导出这些")}</button>
+                })}
               </p>
             ) : null}
           </CardContent>

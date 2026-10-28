@@ -1,258 +1,157 @@
 /**
- * 周结付款 export (the "导出" panel on the weekly payouts page), as pure functions.
+ * The payment list: one file with everyone who is still owed a promoter commission.
  *
- * One export for everything finance needs to hand out or check: a week, a date
- * range, everything still unpaid, or everything unpaid from before a week; with
- * promoter commissions and rider delivery fees together; unpaid, paid or both;
- * one line per person per week, or one line per order.
+ * The 导出 button on the weekly payouts page downloads it. It holds every commission
+ * that is confirmed and not yet paid, from the oldest week to the newest, and nothing
+ * else: no rider fees, no unconfirmed commissions, no commissions already paid. When
+ * a payment is recorded the commission leaves the list, so the next export only holds
+ * what is still owed.
  *
- * Which date an item is "attributed" to is the same rule the weekly sheet uses:
- * a commission to the day it was CONFIRMED, a rider fee to the day the delivery
- * was COMPLETED, both read as Nairobi calendar days. Nothing here changes
- * data; the loader that reads the database lives in operations-payout.service.ts.
+ * This file only arranges the rows (pure functions, no database). The loader that reads
+ * the database lives in operations-payout.service.ts; the .xlsx file itself is built by
+ * the page from the lines made here. Nothing here changes data.
  */
-import { NAIROBI_OFFSET_MS, nairobiDay, normalizeKenyaPhone, payoutWeek, type PayoutWeek } from "./operations-payout-sheet";
+import { nairobiDay, normalizeKenyaPhone, payoutWeek } from "./operations-payout-sheet";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-export type ExportScope = "week" | "range" | "all" | "earlier";
-export type ExportStatus = "pending" | "paid" | "all";
-export type ExportFormat = "summary" | "detail";
-
-export type ExportInput = {
-  scope?: string;
-  /** Any Nairobi YYYY-MM-DD inside the week (scope week, earlier); default last week. */
-  week?: string;
-  /** Nairobi YYYY-MM-DD, both inclusive (scope range). */
-  from?: string;
-  to?: string;
-  status?: string;
-  /** Comma list of "affiliate", "rider"; default both. */
-  include?: string;
-  format?: string;
-};
-
-export type ExportOptions = {
-  scope: ExportScope;
-  status: ExportStatus;
-  format: ExportFormat;
-  includeAffiliate: boolean;
-  includeRider: boolean;
-  /** Attribution window [start, end); null = unbounded on that side. */
-  start: Date | null;
-  end: Date | null;
-  /** The part of the file name that says what range this is. */
-  label: string;
-};
-
+/** One confirmed, unpaid commission. */
 export type ExportItem = {
-  status: "pending" | "paid";
-  kind: "COMMISSION" | "RIDER_FEE";
   payeeKey: string;
-  payeeType: "AFFILIATE" | "RIDER";
   name: string;
   phone: string | null;
   orderNumber: string;
-  orderDate: Date | null;
-  /** confirmedAt for a commission, completedAt for a delivery. */
-  attributedAt: Date | null;
+  /** When staff confirmed it; this puts it in a Monday–Sunday payout week. */
+  confirmedAt: Date | null;
   amountKsh: number;
-  payoutId: string | null;
-  paidAt: Date | null;
-  mpesaCode: string | null;
-};
-
-export type ExportSummary = {
-  people: number;
-  affiliatePeople: number;
-  riderPeople: number;
-  amountKsh: number;
-  itemCount: number;
-  /** People in the export with no usable M-Pesa phone number. */
-  missingPhonePeople: number;
-  /** True when the export hit the safety cap on rows and may be incomplete. */
-  truncated: boolean;
 };
 
 export const EXPORT_ROW_LIMIT = 20000;
 
-const SCOPES: ExportScope[] = ["week", "range", "all", "earlier"];
-const STATUSES: ExportStatus[] = ["pending", "paid", "all"];
-const FORMATS: ExportFormat[] = ["summary", "detail"];
+/** A colour block is shown only for a promoter who has more than one row; 0 and 1 alternate. */
+export type PayoutListBlock = 0 | 1 | null;
 
-function realDay(value: string | undefined, name: string): number {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value?.trim() ?? "");
-  if (!match) throw new Error(`${name} must be a date written YYYY-MM-DD.`);
-  const utc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (!Number.isFinite(utc) || new Date(utc).toISOString().slice(0, 10) !== (value ?? "").trim()) {
-    throw new Error(`${name} must be a real calendar date.`);
-  }
-  return utc;
+export type PayoutListLine =
+  | {
+      kind: "item";
+      block: PayoutListBlock;
+      promoter: string;
+      phone: string;
+      week: string;
+      orders: number;
+      amountKsh: number;
+      note: string;
+    }
+  | { kind: "subtotal"; block: 0 | 1; promoter: string; orders: number; amountKsh: number; note: string }
+  | { kind: "total"; people: number; orders: number; amountKsh: number };
+
+export type PayoutListSummary = {
+  /** Different promoters, however many weeks each is owed. */
+  people: number;
+  /** Rows for a promoter and a week (subtotal and total rows are not counted). */
+  rows: number;
+  orders: number;
+  amountKsh: number;
+  /** People with no phone, or a phone that is not an M-Pesa number. */
+  phoneProblems: number;
+  /** True when the safety cap on rows was hit and the list may be incomplete. */
+  truncated: boolean;
+};
+
+export type PayoutList = {
+  fileName: string;
+  summary: PayoutListSummary;
+  lines: PayoutListLine[];
+};
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function shortDay(day: string): string {
+  return `${Number(day.slice(8, 10))} ${MONTHS[Number(day.slice(5, 7)) - 1]}`;
 }
 
-/** Validates the panel's choices. A bad value is refused, never replaced by a default. */
-export function parseExportOptions(input: ExportInput, now = new Date()): ExportOptions {
-  const scope = (input.scope?.trim() || "week") as ExportScope;
-  if (!SCOPES.includes(scope)) throw new Error("scope must be week, range, all or earlier.");
-  const status = (input.status?.trim() || "pending") as ExportStatus;
-  if (!STATUSES.includes(status)) throw new Error("status must be pending, paid or all.");
-  const format = (input.format?.trim() || "summary") as ExportFormat;
-  if (!FORMATS.includes(format)) throw new Error("format must be summary or detail.");
-
-  const parts = (input.include?.trim() ? input.include : "affiliate,rider").split(",").map((part) => part.trim()).filter(Boolean);
-  if (parts.some((part) => part !== "affiliate" && part !== "rider")) throw new Error("include must list affiliate and/or rider.");
-  const includeAffiliate = parts.includes("affiliate");
-  const includeRider = parts.includes("rider");
-  if (!includeAffiliate && !includeRider) throw new Error("Choose promoter commissions, rider fees or both.");
-
-  let start: Date | null = null;
-  let end: Date | null = null;
-  let label: string;
-  if (scope === "week") {
-    const week: PayoutWeek = payoutWeek(input.week, now);
-    start = week.start;
-    end = week.end;
-    label = `${week.firstDay}_${week.lastDay}`;
-  } else if (scope === "earlier") {
-    const week: PayoutWeek = payoutWeek(input.week, now);
-    end = week.start;
-    label = `before-${week.firstDay}`;
-  } else if (scope === "range") {
-    const from = realDay(input.from, "from");
-    const to = realDay(input.to, "to");
-    if (from > to) throw new Error("The start date must not be after the end date.");
-    start = new Date(from - NAIROBI_OFFSET_MS);
-    end = new Date(to + DAY_MS - NAIROBI_OFFSET_MS);
-    label = `${input.from!.trim()}_${input.to!.trim()}`;
-  } else {
-    label = `all-${nairobiDay(now)}`;
-  }
-  return { scope, status, format, includeAffiliate, includeRider, start, end, label };
+/** `12 Oct–18 Oct`, with the year added when the week is not in the current year. */
+export function weekLabel(confirmedAt: Date | null, now: Date): string {
+  if (!confirmedAt) return "";
+  const week = payoutWeek(nairobiDay(confirmedAt));
+  const label = `${shortDay(week.firstDay)}–${shortDay(week.lastDay)}`;
+  const thisYear = nairobiDay(now).slice(0, 4);
+  // A week that is not wholly inside this year says which year it ends in.
+  return week.firstDay.slice(0, 4) === thisYear && week.lastDay.slice(0, 4) === thisYear ? label : `${label} ${week.lastDay.slice(0, 4)}`;
 }
 
-export function exportFileName(options: ExportOptions): string {
-  return `payouts-${options.status}-${options.format}-${options.label}.csv`;
-}
-
-function weekOf(item: ExportItem): { firstDay: string; lastDay: string } | null {
-  if (!item.attributedAt) return null;
-  const week = payoutWeek(nairobiDay(item.attributedAt));
-  return { firstDay: week.firstDay, lastDay: week.lastDay };
-}
-
-function weekLabel(week: { firstDay: string; lastDay: string } | null): string {
-  return week ? `${week.firstDay}~${week.lastDay}` : "";
-}
-
-function dayOrEmpty(value: Date | null): string {
-  return value ? nairobiDay(value) : "";
-}
-
-/** The note a person doing the payments needs to see on the line. */
-function phoneNote(item: Pick<ExportItem, "status" | "phone">): string {
-  if (item.status !== "pending") return "";
-  if (!item.phone || !item.phone.trim()) return "没有手机号";
-  if (!normalizeKenyaPhone(item.phone)) return "手机号不是有效的 M-Pesa 号码";
+/** What the person doing the payments needs to know about this phone number. */
+export function phoneNote(phone: string | null): string {
+  if (!phone || !phone.trim()) return "No phone number";
+  if (!normalizeKenyaPhone(phone)) return "Phone is not a valid M-Pesa number";
   return "";
 }
 
-export type CsvCell = string | number | null;
-
-export const SUMMARY_HEADER = ["状态", "类型", "姓名", "电话", "笔数", "金额(KSh)", "所属周", "付款日期", "M-Pesa 交易码", "备注"];
-export const DETAIL_HEADER = ["状态", "类型", "姓名", "电话", "订单号", "下单日期", "归属日期", "所属周", "金额(KSh)", "付款日期", "M-Pesa 交易码", "备注"];
-
-const STATUS_LABEL = { pending: "待付", paid: "已付" } as const;
-const TYPE_LABEL = { AFFILIATE: "推广员", RIDER: "骑手" } as const;
-
-function compareItems(a: ExportItem, b: ExportItem): number {
-  return (a.status === b.status ? 0 : a.status === "pending" ? -1 : 1)
-    || weekLabel(weekOf(a)).localeCompare(weekLabel(weekOf(b)))
-    || a.payeeType.localeCompare(b.payeeType)
-    || a.name.localeCompare(b.name)
-    || (a.attributedAt?.getTime() ?? 0) - (b.attributedAt?.getTime() ?? 0)
-    || a.orderNumber.localeCompare(b.orderNumber);
+export function payoutListFileName(now: Date): string {
+  return `payout-list-${nairobiDay(now)}.xlsx`;
 }
 
-/** Pending first, then oldest week first; within a week promoters, then riders, biggest amount first. */
-export function buildExportRows(items: ExportItem[], format: ExportFormat): { header: string[]; rows: CsvCell[][] } {
-  if (format === "detail") {
-    const rows = [...items].sort(compareItems).map((item) => [
-      STATUS_LABEL[item.status],
-      TYPE_LABEL[item.payeeType],
-      item.name,
-      item.phone,
-      item.orderNumber,
-      dayOrEmpty(item.orderDate),
-      dayOrEmpty(item.attributedAt),
-      weekLabel(weekOf(item)),
-      item.amountKsh,
-      dayOrEmpty(item.paidAt),
-      item.mpesaCode,
-      phoneNote(item)
-    ] as CsvCell[]);
-    return { header: DETAIL_HEADER, rows };
-  }
+type Row = { payeeKey: string; name: string; phone: string | null; firstDay: string; label: string; orders: number; amountKsh: number };
 
-  type Group = { sample: ExportItem; amountKsh: number; count: number };
-  const groups = new Map<string, Group>();
+/**
+ * Sorted by promoter name, a promoter's rows together, oldest week first. A promoter who is owed
+ * for more than one week gets a colour block and a subtotal line (the amount to send in one go);
+ * a promoter with one row stays plain. The last line adds everything up.
+ */
+export function buildPayoutList(items: ExportItem[], truncated: boolean, now: Date): PayoutList {
+  const rows = new Map<string, Row>();
   for (const item of items) {
-    const key = [item.status, item.payeeKey, weekLabel(weekOf(item)), item.payoutId ?? ""].join("|");
-    const group = groups.get(key);
-    if (group) {
-      group.amountKsh += item.amountKsh;
-      group.count += 1;
+    const label = weekLabel(item.confirmedAt, now);
+    const firstDay = item.confirmedAt ? payoutWeek(nairobiDay(item.confirmedAt)).firstDay : "";
+    const key = `${item.payeeKey}|${firstDay}`;
+    const row = rows.get(key);
+    if (row) {
+      row.orders += 1;
+      row.amountKsh += item.amountKsh;
+      if (!row.phone && item.phone) row.phone = item.phone;
     } else {
-      groups.set(key, { sample: item, amountKsh: item.amountKsh, count: 1 });
+      rows.set(key, { payeeKey: item.payeeKey, name: item.name, phone: item.phone, firstDay, label, orders: 1, amountKsh: item.amountKsh });
     }
   }
-  const ordered = [...groups.values()].sort((a, b) =>
-    (a.sample.status === b.sample.status ? 0 : a.sample.status === "pending" ? -1 : 1)
-    || weekLabel(weekOf(a.sample)).localeCompare(weekLabel(weekOf(b.sample)))
-    || a.sample.payeeType.localeCompare(b.sample.payeeType)
-    || b.amountKsh - a.amountKsh
-    || a.sample.name.localeCompare(b.sample.name));
-  const rows = ordered.map(({ sample, amountKsh, count }) => [
-    STATUS_LABEL[sample.status],
-    TYPE_LABEL[sample.payeeType],
-    sample.name,
-    sample.phone,
-    count,
-    amountKsh,
-    weekLabel(weekOf(sample)),
-    dayOrEmpty(sample.paidAt),
-    sample.mpesaCode,
-    phoneNote(sample)
-  ] as CsvCell[]);
-  return { header: SUMMARY_HEADER, rows };
-}
 
-export function summarizeExport(items: ExportItem[], truncated: boolean): ExportSummary {
-  const people = new Map<string, ExportItem>();
-  for (const item of items) {
-    const seen = people.get(item.payeeKey);
-    // A person counts as missing a phone only if none of their items has one.
-    if (!seen || (!seen.phone && item.phone)) people.set(item.payeeKey, item);
+  const byPerson = new Map<string, Row[]>();
+  for (const row of rows.values()) {
+    const list = byPerson.get(row.payeeKey);
+    if (list) list.push(row);
+    else byPerson.set(row.payeeKey, [row]);
   }
-  const list = [...people.values()];
+  const people = [...byPerson.values()]
+    .map((list) => list.sort((a, b) => a.firstDay.localeCompare(b.firstDay)))
+    .sort((a, b) => a[0]!.name.localeCompare(b[0]!.name, "en", { sensitivity: "base" }) || a[0]!.payeeKey.localeCompare(b[0]!.payeeKey));
+
+  const lines: PayoutListLine[] = [];
+  let nextBlock: 0 | 1 = 0;
+  let orders = 0;
+  let amountKsh = 0;
+  let phoneProblems = 0;
+  for (const list of people) {
+    const first = list[0]!;
+    // A person's phone is whichever row has one, so every row of theirs carries the same number.
+    const phone = list.find((row) => row.phone && row.phone.trim())?.phone ?? null;
+    const note = phoneNote(phone);
+    if (note) phoneProblems += 1;
+    const shown = phone ? (normalizeKenyaPhone(phone) ?? phone.trim()) : "";
+    const block: PayoutListBlock = list.length > 1 ? nextBlock : null;
+    for (const row of list) {
+      lines.push({ kind: "item", block, promoter: first.name, phone: shown, week: row.label, orders: row.orders, amountKsh: row.amountKsh, note });
+    }
+    const personOrders = list.reduce((sum, row) => sum + row.orders, 0);
+    const personAmount = list.reduce((sum, row) => sum + row.amountKsh, 0);
+    if (block !== null) {
+      lines.push({ kind: "subtotal", block, promoter: first.name, orders: personOrders, amountKsh: personAmount, note: `Send KSh ${personAmount.toLocaleString("en-US")}` });
+      nextBlock = nextBlock === 0 ? 1 : 0;
+    }
+    orders += personOrders;
+    amountKsh += personAmount;
+  }
+  if (people.length) lines.push({ kind: "total", people: people.length, orders, amountKsh });
+
   return {
-    people: list.length,
-    affiliatePeople: list.filter((item) => item.payeeType === "AFFILIATE").length,
-    riderPeople: list.filter((item) => item.payeeType === "RIDER").length,
-    amountKsh: items.reduce((sum, item) => sum + item.amountKsh, 0),
-    itemCount: items.length,
-    missingPhonePeople: list.filter((item) => !item.phone || !item.phone.trim()).length,
-    truncated
+    fileName: payoutListFileName(now),
+    summary: { people: people.length, rows: rows.size, orders, amountKsh, phoneProblems, truncated },
+    lines
   };
-}
-
-/** One CSV cell. A name that Excel would read as a formula is turned into plain text. */
-export function exportCsvCell(value: CsvCell): string {
-  let text = value === null || value === undefined ? "" : String(value);
-  const startsLikeFormula = /^[=@\t\r]/.test(text) || (/^[+-]/.test(text) && !/^[+-]?[\d\s().-]+$/.test(text));
-  if (startsLikeFormula) text = `'${text}`;
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-export function exportCsv(header: string[], rows: CsvCell[][]): string {
-  return `${[header, ...rows].map((line) => line.map(exportCsvCell).join(",")).join("\n")}\n`;
 }
