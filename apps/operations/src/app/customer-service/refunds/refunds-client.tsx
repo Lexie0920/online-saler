@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { t } from "@/i18n/runtime";
+import { ReturnPhotoStrip } from "@/app/orders/return-photo-strip";
 
 import {
   REFUND_STATUS_LABELS,
@@ -145,6 +146,15 @@ export function CustomerServiceRefundsPage() {
                   <TableCell className="font-medium">{money(request.amountKsh)}</TableCell>
                   <TableCell className="max-w-56 text-xs">
                     <div>{request.reason}</div>
+                    {request.afterSaleReturn && request.order ? (
+                      <div className="mt-2 flex flex-col gap-2 rounded-md bg-muted/50 p-2">
+                        <div>{request.afterSaleReturn.orderItem?.snapshot?.title ?? t("退回商品")} · Barcode {request.afterSaleReturn.receivedBarcode ?? request.afterSaleReturn.orderItem?.snapshot?.barcode ?? "-"}</div>
+                        {request.afterSaleReturn.inspectionNote ? <div className="text-muted-foreground">{t("验收说明：")}{request.afterSaleReturn.inspectionNote}</div> : null}
+                        {request.afterSaleReturn.photos && request.afterSaleReturn.photos.length > 0
+                          ? <ReturnPhotoStrip orderId={request.order.id} returnId={request.afterSaleReturn.id} photos={request.afterSaleReturn.photos} token={accessToken} />
+                          : <div className="text-muted-foreground">{t("这笔退货没有照片（照片要求上线前验收的退货）。")}</div>}
+                      </div>
+                    ) : null}
                     {request.reviewNote ? <div className="text-muted-foreground">{t("审批意见")}: {request.reviewNote}</div> : null}
                   </TableCell>
                   {/* A lapsed deposit hold is raised by the expiry sweep, not
@@ -175,7 +185,10 @@ export function CustomerServiceRefundsPage() {
                           }}>{t("驳回")}</Button>
                         </>
                       ) : null}
-                      {canRecord && request.status === "APPROVED" ? (
+                      {request.afterSaleReturn && request.order && request.status === "APPROVED" ? (
+                        <Link href={`/orders/${request.order.id}`} className="text-xs underline">{t("到订单页登记退款")}</Link>
+                      ) : null}
+                      {canRecord && request.status === "APPROVED" && !request.afterSaleReturn ? (
                         <Button size="sm" disabled={busy} onClick={() => setRecording({
                           id: request.id, externalReference: "", evidenceNote: "", refundedAt: new Date().toISOString().slice(0, 16)
                         })}>{t("登记已打款")}</Button>

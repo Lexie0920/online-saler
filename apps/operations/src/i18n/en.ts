@@ -3240,4 +3240,11 @@ export const enDictionary: Record<string, string> = {
   "退回商品照片（{count}）": "Photos of the returned item ({count})",
   "退回商品照片 {number}": "Returned item photo {number}",
   "照片读取失败": "Photo could not be loaded",
+  "退款申请：": "Refund request: ",
+  "等待审批": "Awaiting approval",
+  "已批准，等待登记退款": "Approved, waiting for the refund to be recorded",
+  "退款需要先在「客户服务 > 退款审批」里由另一位有权限的同事批准，批准后这里才能登记退款。": "The refund must first be approved by another colleague under Customer service > Refund approvals. Once approved, you can record it here.",
+  "验收说明：": "Inspection note: ",
+  "这笔退货没有照片（照片要求上线前验收的退货）。": "This return has no photos (it was accepted before photos were required).",
+  "到订单页登记退款": "Record the refund on the order",
 };

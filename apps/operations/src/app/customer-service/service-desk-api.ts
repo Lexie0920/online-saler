@@ -227,6 +227,17 @@ export type RefundRequestRow = {
   completedAt?: string | null;
   order?: { id: string; orderNumber: string; totalKsh: number; customer?: { displayName?: string | null; phone?: string | null } | null } | null;
   serviceCase?: { id: string; title: string; status: string } | null;
+  /** Set when the refund is for a returned item the warehouse accepted. */
+  afterSaleReturn?: {
+    id: string;
+    status: string;
+    reason?: string | null;
+    inspectionNote?: string | null;
+    receivedBarcode?: string | null;
+    restockable?: boolean | null;
+    photos?: Array<{ id: string; contentType: string; sizeBytes: number; createdAt: string }>;
+    orderItem?: { snapshot?: { title?: string | null; barcode?: string | null } | null } | null;
+  } | null;
   requestedByAdminUser?: { name: string } | null;
   reviewedByAdminUser?: { name: string } | null;
   refundRecord?: { externalReference: string; refundedAt: string; amountKsh: number } | null;

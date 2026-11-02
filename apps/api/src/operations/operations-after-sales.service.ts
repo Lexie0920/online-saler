@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
-import { ActorType, AfterSaleReturnReason, AfterSaleReturnStatus, CommissionAdjustmentKind, CommissionStatus, CustomerServiceCaseStatus, CustomerServiceCaseType, CustomerServiceIssueType, FulfillmentNodeStatus, InventoryItemStatus, InventoryMovementType, OrderStatus, PaymentStatus, Prisma, ProductStatus, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
+import { ActorType, AfterSaleReturnReason, AfterSaleReturnStatus, CommissionAdjustmentKind, CommissionStatus, CustomerServiceCaseStatus, CustomerServiceCaseType, CustomerServiceIssueType, FulfillmentNodeStatus, InventoryItemStatus, InventoryMovementType, OrderStatus, PaymentStatus, Prisma, ProductStatus, RefundRequestStatus, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
 import { OperationsAccessService } from "./operations-access.service";
 import { assertRefundAmount, assertReturnPhotoCount, assertReturnWindow, commissionShares, requiredText, RETURN_PHOTO_MAX, RETURN_REASONS, returnPhotoContentType } from "./operations-after-sales.rules";
 import { ProductImageStorageService } from "../product/product-image-storage.service";
+import { approvedRequestFor, raiseReturnRefundRequest, refundNeedsApprovedRequest } from "./operations-return-refund-request";
 import { refreshWarehouseLocationStatuses, WAREHOUSE_OCCUPYING_STATUSES } from "./warehouse-capacity";
 import { scopedNodeId, storeScopeFor } from "./store-scope";
 
@@ -17,7 +18,7 @@ export type AfterSalesInput = {
 type Action = "REQUEST" | "DECISION" | "RECEIVE" | "REFUND" | "RESTOCK";
 /** Photo metadata only: the storage path never leaves the server. */
 const PHOTO_SELECT = { id: true, contentType: true, sizeBytes: true, uploadedByAdminUserId: true, createdAt: true } as const;
-const RETURN_INCLUDE = { orderItem: { include: { snapshot: true } }, photos: { select: PHOTO_SELECT, orderBy: { createdAt: "asc" as const } }, refunds: { orderBy: { recordedAt: "asc" as const } }, commissionAdjustment: true, events: { orderBy: { createdAt: "asc" as const } } } as const;
+const RETURN_INCLUDE = { orderItem: { include: { snapshot: true } }, photos: { select: PHOTO_SELECT, orderBy: { createdAt: "asc" as const } }, refundRequests: { select: { id: true, status: true, amountKsh: true, reviewNote: true, reviewedAt: true }, orderBy: { requestedAt: "asc" as const } }, refunds: { orderBy: { recordedAt: "asc" as const } }, commissionAdjustment: true, events: { orderBy: { createdAt: "asc" as const } } } as const;
 const ORDER_INCLUDE = { items: { include: { snapshot: true } }, payments: true, fulfillment: true, commission: { include: { adjustments: true } }, afterSaleReturns: { include: RETURN_INCLUDE } } as const;
 type Order = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
 type Return = Order["afterSaleReturns"][number];
@@ -90,6 +91,16 @@ export class OperationsAfterSalesService {
           const inventory = await tx.inventoryItem.findUnique({ where: { productId: record!.orderItem.productId } });
           if (input.restockable && (!inventory || barcode !== inventory.barcode || barcode !== record!.orderItem.snapshot?.barcode)) throw new BadRequestException("A mismatched returned barcode cannot be restocked. Record it as not restockable for review.");
           await tx.afterSaleReturn.update({ where: { id: record!.id }, data: { status: AfterSaleReturnStatus.RECEIVED, receivedAt: now, receivedByAdminUserId: adminUserId, receivedBarcode: barcode, restockable: input.restockable, inspectionNote: note, inventoryUpdatedAt: inventory?.updatedAt ?? null } });
+          await raiseReturnRefundRequest(tx, {
+            orderId: order.id,
+            paidKsh: order.payments.filter((payment) => payment.status === PaymentStatus.SUCCESS).reduce((sum, payment) => sum + payment.amountKsh, 0),
+            serviceCaseId: record!.serviceCaseId,
+            afterSaleReturnId: record!.id,
+            amountKsh: record!.orderItem.lineTotalKsh,
+            reason: `Returned item accepted at the counter: ${note}`,
+            requestedByAdminUserId: adminUserId,
+            actorEmployeeId: employeeId
+          });
         } else if (action === "REFUND") {
           await this.refund(tx, order, record!, input, adminUserId, now);
         } else if (action === "RESTOCK") {
@@ -168,15 +179,28 @@ export class OperationsAfterSalesService {
     const refundedAt = new Date(requiredText(input.refundedAt, "Actual refund timestamp", 50));
     if (!Number.isFinite(refundedAt.getTime()) || refundedAt > now || refundedAt < record.receivedAt!) throw new BadRequestException("Actual refund time must be after item receipt and cannot be in the future.");
     const itemRefunded = record.refunds.reduce((sum, row) => sum + row.amountKsh, 0);
+    // A return accepted with photos has a refund request. The refund can only be
+    // recorded once an approver other than the person who accepted the item has
+    // approved it, and never for more than was approved.
+    const requests = await tx.refundRequest.findMany({ where: { afterSaleReturnId: record.id }, select: { id: true, status: true, amountKsh: true } });
+    const approvedRequest = approvedRequestFor(requests);
+    if (refundNeedsApprovedRequest(await tx.afterSaleReturnPhoto.count({ where: { afterSaleReturnId: record.id } }), requests)) {
+      if (!approvedRequest) throw new BadRequestException("This return needs an approved refund request before the refund is recorded. Approve it under Customer service > Refund approvals.");
+      if (itemRefunded + (input.amountKsh ?? 0) > approvedRequest.amountKsh) throw new BadRequestException("The refund would exceed the amount that was approved.");
+    }
     const totalRefunded = order.afterSaleReturns.flatMap((row) => row.refunds).reduce((sum, row) => sum + row.amountKsh, 0);
     const paymentAmount = order.payments.filter((row) => row.status === PaymentStatus.SUCCESS).reduce((sum, row) => sum + row.amountKsh, 0);
     assertRefundAmount(input.amountKsh, record.orderItem.lineTotalKsh, itemRefunded, order.totalKsh, totalRefunded, paymentAmount);
-    await tx.refundRecord.create({ data: { orderId: order.id, afterSaleReturnId: record.id, amountKsh: input.amountKsh, externalReference, evidenceNote, refundedAt, recordedByAdminUserId: adminUserId } });
+    const refundRecord = await tx.refundRecord.create({ data: { orderId: order.id, afterSaleReturnId: record.id, amountKsh: input.amountKsh, externalReference, evidenceNote, refundedAt, recordedByAdminUserId: adminUserId } });
     // The existing return policy has no negotiated partial-compensation settlement.
     // Keep the case and commission hold open until the sold item's full price is recorded.
     const fullyRefunded = itemRefunded + input.amountKsh === record.orderItem.lineTotalKsh;
     await tx.afterSaleReturn.update({ where: { id: record.id }, data: { status: fullyRefunded ? AfterSaleReturnStatus.REFUND_RECORDED : AfterSaleReturnStatus.RECEIVED } });
     if (fullyRefunded) await this.closeCase(tx, record.serviceCaseId, now);
+    if (fullyRefunded && approvedRequest) {
+      await tx.refundRequest.update({ where: { id: approvedRequest.id }, data: { status: RefundRequestStatus.REFUNDED, refundRecordId: refundRecord.id, completedAt: now } });
+      await tx.auditLog.create({ data: { actorType: ActorType.EMPLOYEE, actorId: null, actorAdminUserId: adminUserId, sourceApp: SourceApp.OPERATIONS, module: "customer-service", entityType: "RefundRequest", entityId: approvedRequest.id, action: "REFUND_REQUEST_COMPLETE", beforeJson: { status: RefundRequestStatus.APPROVED }, afterJson: { status: RefundRequestStatus.REFUNDED, refundRecordId: refundRecord.id }, reason: input.evidenceNote ?? "" } });
+    }
     if (totalRefunded + input.amountKsh === order.totalKsh) await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.REFUNDED } });
     const commission = order.commission;
     if (commission && !record.commissionAdjustment) {

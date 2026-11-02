@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { operationsFormatLocale, t } from "@/i18n/runtime";
 import { compressPhoto, photoSlotsLeft, RETURN_PHOTO_MAX_COUNT } from "@/lib/return-photo";
+import { ReturnPhotoStrip, type ReturnPhoto } from "./return-photo-strip";
 
 type AfterSalesOrder = {
   id: string;
@@ -31,7 +32,6 @@ type AfterSalesOrder = {
     inventoryItem?: { barcode: string } | null;
   }>;
 };
-type ReturnPhoto = { id: string; contentType: string; sizeBytes: number; createdAt: string };
 type ReturnRecord = {
   id: string;
   orderItemId: string;
@@ -46,6 +46,7 @@ type ReturnRecord = {
   restockable?: boolean | null;
   restockedAt?: string | null;
   photos?: ReturnPhoto[];
+  refundRequests?: Array<{ id: string; status: "PENDING_APPROVAL" | "APPROVED" | "REJECTED" | "REFUNDED" | "CANCELLED"; amountKsh: number; reviewNote?: string | null }>;
   refunds: Array<{ id: string; amountKsh: number; externalReference: string; refundedAt: string }>;
   events: Array<{ id: string; action: string; reason: string; createdAt: string }>;
   commissionAdjustment?: { kind: string; amountKsh?: number } | null;
@@ -67,6 +68,9 @@ const STATUS_LABELS: Record<ReturnRecord["status"], string> = {
 const ACTION_LABELS: Record<Action, string> = {
   request: "新建售后申请", approve: "批准退货", reject: "拒绝申请", receive: "实物退回验收",
   refund: "登记已完成的外部退款", restock: "退回商品入库复审"
+};
+const REFUND_REQUEST_LABELS: Record<string, string> = {
+  PENDING_APPROVAL: "等待审批", APPROVED: "已批准，等待登记退款", REJECTED: "已驳回", REFUNDED: "已退款", CANCELLED: "已撤回"
 };
 const EVENT_LABELS: Record<string, string> = {
   REQUEST: "申请退货", DECISION: "审核决定",
@@ -157,6 +161,11 @@ export function AfterSalesPanel({ order, session, onOrderChanged }: {
           const refunded = record.refunds.reduce((sum, refund) => sum + refund.amountKsh, 0);
           const remaining = record.orderItem.lineTotalKsh - refunded;
           const disabled = loading || Boolean(error);
+          // A return accepted with photos has a refund request; the refund can only be recorded after it is approved.
+          const requests = record.refundRequests ?? [];
+          const needsApproval = (record.photos?.length ?? 0) > 0 || requests.length > 0;
+          const approvedRequest = requests.find((request) => request.status === "APPROVED");
+          const latestRequest = requests.at(-1);
           return (
             <section key={record.id} className="flex flex-col gap-3 rounded-lg border p-4" aria-label={t("售后：{v0}", { v0: item?.snapshot?.title ?? record.orderItemId })}>
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -174,11 +183,13 @@ export function AfterSalesPanel({ order, session, onOrderChanged }: {
                 {record.restockedAt ? <p>{t("已入库复审：")}{formatDate(record.restockedAt)}</p> : null}
                 {record.commissionAdjustment?.kind === "RECOVERY_REQUIRED" ? <p>{t("已付佣金待追回，请联系财务核对。")}</p> : null}
               </div>
+              {latestRequest ? <p className="text-sm">{t("退款申请：")}{t(REFUND_REQUEST_LABELS[latestRequest.status] ?? latestRequest.status)} · {money(latestRequest.amountKsh)}{latestRequest.reviewNote ? ` · ${latestRequest.reviewNote}` : ""}</p> : null}
               {record.photos && record.photos.length > 0 ? <ReturnPhotoStrip orderId={order.id} returnId={record.id} photos={record.photos} token={accessToken} /> : null}
               <div className="flex flex-wrap gap-2">
                 {record.status === "REQUESTED" && canApprove ? <><Button size="sm" disabled={disabled} onClick={() => setAction({ kind: "approve", record })}>{t("批准退货")}</Button><Button size="sm" variant="outline" disabled={disabled} onClick={() => setAction({ kind: "reject", record })}>{t("拒绝申请")}</Button></> : null}
                 {record.status === "APPROVED" && canOperate ? <Button size="sm" disabled={disabled} onClick={() => setAction({ kind: "receive", record })}>{t("实物退回验收")}</Button> : null}
-                {["RECEIVED", "REFUND_RECORDED"].includes(record.status) && remaining > 0 && canApprove ? <Button size="sm" disabled={disabled} onClick={() => setAction({ kind: "refund", record })}>{t("登记已完成的外部退款")}</Button> : null}
+                {["RECEIVED", "REFUND_RECORDED"].includes(record.status) && remaining > 0 && canApprove && (!needsApproval || approvedRequest) ? <Button size="sm" disabled={disabled} onClick={() => setAction({ kind: "refund", record })}>{t("登记已完成的外部退款")}</Button> : null}
+                {["RECEIVED", "REFUND_RECORDED"].includes(record.status) && remaining > 0 && needsApproval && !approvedRequest ? <p className="text-muted-foreground text-sm">{t("退款需要先在「客户服务 > 退款审批」里由另一位有权限的同事批准，批准后这里才能登记退款。")}</p> : null}
                 {record.status === "REFUND_RECORDED" && record.restockable && !record.restockedAt && canOperate ? <Button size="sm" variant="outline" disabled={disabled} onClick={() => setAction({ kind: "restock", record })}>{t("退回商品入库复审")}</Button> : null}
               </div>
               {(record.refunds.length > 0 || record.events.length > 0) ? <details className="text-sm"><summary className="cursor-pointer font-medium">{t("退款凭证与处理记录")}</summary><div className="mt-3 flex flex-col gap-3">
@@ -370,41 +381,6 @@ function AfterSaleDialog({ action, order, eligibleItems, token, onClose, onDone 
       </DialogContent>
     </Dialog>
   );
-}
-
-/** The photos are private, so each one is fetched with the employee's session and shown from memory. */
-function ReturnPhotoStrip({ orderId, returnId, photos, token }: { orderId: string; returnId: string; photos: ReturnPhoto[]; token: string }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <p className="font-medium text-sm">{t("退回商品照片（{count}）", { count: photos.length })}</p>
-      <div className="flex flex-wrap gap-2">
-        {photos.map((photo, index) => <ReturnPhotoThumb key={photo.id} orderId={orderId} returnId={returnId} photoId={photo.id} token={token} label={t("退回商品照片 {number}", { number: index + 1 })} />)}
-      </div>
-    </div>
-  );
-}
-
-function ReturnPhotoThumb({ orderId, returnId, photoId, token, label }: { orderId: string; returnId: string; photoId: string; token: string; label: string }) {
-  const [url, setUrl] = useState("");
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let objectUrl = "";
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await operationsFetch(`/api-proxy/operations/orders/${encodeURIComponent(orderId)}/after-sales/${encodeURIComponent(returnId)}/photos/${encodeURIComponent(photoId)}/content`, { headers: { Authorization: `Bearer ${token}` } });
-        if (!response.ok) throw new Error("photo");
-        objectUrl = URL.createObjectURL(await response.blob());
-        if (cancelled) URL.revokeObjectURL(objectUrl); else setUrl(objectUrl);
-      } catch {
-        if (!cancelled) setFailed(true);
-      }
-    })();
-    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [orderId, returnId, photoId, token]);
-  if (failed) return <div className="flex size-24 items-center justify-center rounded-md border text-center text-muted-foreground text-xs">{t("照片读取失败")}</div>;
-  if (!url) return <div className="size-24 animate-pulse rounded-md border bg-muted" aria-label={label} />;
-  return <a href={url} target="_blank" rel="noreferrer" aria-label={label}><img src={url} alt={label} className="size-24 rounded-md border object-cover" /></a>;
 }
 
 function Choice({ id, label, value, onChange, options, disabled }: {

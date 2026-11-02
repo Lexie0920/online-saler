@@ -32,7 +32,8 @@ type RequestRow = {
 type HarnessOptions = {
   paidKsh?: number;
   refundedKsh?: number;
-  existingRequests?: Array<{ amountKsh: number; status: string }>;
+  existingRequests?: Array<{ amountKsh: number; status: string; afterSaleReturnId?: string }>;
+  returnStatus?: string;
   request?: Partial<RequestRow>;
 };
 
@@ -88,7 +89,7 @@ function harness(t: TestContext, options: HarnessOptions = {}) {
         return data;
       }
     },
-    afterSaleReturn: { findUnique: async () => ({ orderId: "order-1", status: "RECEIVED" }) },
+    afterSaleReturn: { findUnique: async () => ({ orderId: "order-1", status: options.returnStatus ?? "RECEIVED" }) },
     refundRecord: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         events.push("create-refund-record");
@@ -344,4 +345,31 @@ test("a decision that has already been made cannot be made again", async (t) => 
     ConflictException
   );
   assert.equal(h.read().status, "REJECTED");
+});
+
+test("a refund request for a returned item needs the warehouse to have accepted it first", async (t) => {
+  for (const returnStatus of ["REQUESTED", "APPROVED"]) {
+    const h = harness(t, { returnStatus });
+    await assert.rejects(h.service.create({ ...CREATE, afterSaleReturnId: "return-1" }), /warehouse has accepted/);
+    assert.equal(h.read().status, "PENDING_APPROVAL");
+  }
+  const accepted = harness(t, { returnStatus: "RECEIVED" });
+  const created = await accepted.service.create({ ...CREATE, afterSaleReturnId: "return-1" });
+  assert.equal(created.afterSaleReturnId, "return-1");
+});
+
+test("a returned item cannot have two live refund requests", async (t) => {
+  const h = harness(t, { existingRequests: [{ amountKsh: 100, status: "APPROVED", afterSaleReturnId: "return-1" }] });
+  await assert.rejects(h.service.create({ ...CREATE, amountKsh: 100, afterSaleReturnId: "return-1" }), ConflictException);
+  const rejected = harness(t, { existingRequests: [{ amountKsh: 100, status: "REJECTED", afterSaleReturnId: "return-1" }] });
+  await rejected.service.create({ ...CREATE, amountKsh: 100, afterSaleReturnId: "return-1" });
+});
+
+test("a refund for a returned item is recorded on the returns card, not on this page", async (t) => {
+  const h = harness(t, { request: { status: "APPROVED", reviewedAt: new Date(Date.now() - 60_000), afterSaleReturnId: "return-1" } });
+  await assert.rejects(
+    h.service.complete("request-1", { adminUserId: "finance", externalReference: "QK1", evidenceNote: "Sent", refundedAt: new Date().toISOString() }),
+    /Returns and refunds card/
+  );
+  assert.equal(h.refundRecords.length, 0, "no refund record may be written without the return, commission and stock moving with it");
 });

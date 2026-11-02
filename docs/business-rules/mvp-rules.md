@@ -153,6 +153,18 @@ stored in the private product-image bucket (only their path is in the database)
 and are shown on the order's returns card to staff who can view orders. This
 changes no money rule: refunds stay manual and are still recorded afterwards.
 
+Accepting a returned item also raises a refund request (status "awaiting
+approval") for the item's price, in the name of the person who accepted it. A
+different person with the refund-approve permission approves or rejects it under
+Customer service > Refund approvals, looking at the photos. The refund can only
+be recorded on the order's returns card after the request is approved, and never
+for more than was approved; recording the last part closes the request. The
+approvals page does not record refunds for returned items, because only the
+returns card also moves the return, the commission and the stock. A return
+accepted before photos were required has no photos and no request and keeps the
+old direct route. Refunds are still paid by hand in M-Pesa; the system moves no
+money.
+
 ## Refunds
 
 - The system never moves money. A refund is executed in M-Pesa first and then

@@ -40,7 +40,19 @@ const REQUEST_INCLUDE = {
     }
   },
   serviceCase: { select: { id: true, title: true, status: true, caseType: true } },
-  afterSaleReturn: { select: { id: true, status: true, orderItemId: true } },
+  afterSaleReturn: {
+    select: {
+      id: true,
+      status: true,
+      orderItemId: true,
+      reason: true,
+      inspectionNote: true,
+      receivedBarcode: true,
+      restockable: true,
+      photos: { select: { id: true, contentType: true, sizeBytes: true, createdAt: true }, orderBy: { createdAt: "asc" as const } },
+      orderItem: { select: { snapshot: { select: { title: true, barcode: true } } } }
+    }
+  },
   requestedByAdminUser: { select: { id: true, name: true } },
   reviewedByAdminUser: { select: { id: true, name: true } },
   refundRecord: { select: { id: true, externalReference: true, refundedAt: true, amountKsh: true } }
@@ -114,7 +126,7 @@ export class OperationsRefundRequestService {
         include: {
           payments: { where: { status: PaymentStatus.SUCCESS }, select: { amountKsh: true } },
           refunds: { select: { amountKsh: true } },
-          refundRequests: { select: { amountKsh: true, status: true } }
+          refundRequests: { select: { amountKsh: true, status: true, afterSaleReturnId: true } }
         }
       });
       if (!order) throw new NotFoundException("Order was not found.");
@@ -149,6 +161,14 @@ export class OperationsRefundRequestService {
         if (record.orderId !== orderId) throw new BadRequestException("That return belongs to a different order.");
         if (record.status === AfterSaleReturnStatus.REJECTED) {
           throw new BadRequestException("A rejected return cannot be refunded.");
+        }
+        // The warehouse's acceptance (with photos) comes first; accepting the item
+        // raises the request itself, so a second one is only for a rejected request.
+        if (record.status !== AfterSaleReturnStatus.RECEIVED) {
+          throw new BadRequestException("A refund can only be requested for a return the warehouse has accepted.");
+        }
+        if (order.refundRequests.some((row) => row.afterSaleReturnId === afterSaleReturnId && (row.status === RefundRequestStatus.PENDING_APPROVAL || row.status === RefundRequestStatus.APPROVED))) {
+          throw new ConflictException("This return already has a refund request.");
         }
       }
 
@@ -256,6 +276,11 @@ export class OperationsRefundRequestService {
         const existing = await this.lockRequest(tx, requestId);
         if (existing.status !== RefundRequestStatus.APPROVED) {
           throw new ConflictException("Only an approved request can be recorded as refunded.");
+        }
+        // A refund for a returned item is recorded on the order's returns card, so
+        // the return, the commission and the stock move together with the money.
+        if (existing.afterSaleReturnId) {
+          throw new ConflictException("This refund belongs to a returned item. Record it on the order's Returns and refunds card.");
         }
         await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Order" WHERE "id" = ${existing.orderId} FOR UPDATE`);
         if (refundedAt < existing.reviewedAt!) {

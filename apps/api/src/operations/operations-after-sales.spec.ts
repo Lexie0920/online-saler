@@ -87,6 +87,9 @@ test("a 1/200 refund installment cannot close the case or restock; the remaining
       findUniqueOrThrow: async () => record, findMany: async () => [record]
     },
     refundRecord: { create: async ({ data }: { data: { amountKsh: number } }) => { record.refunds.push(data); return data; } },
+    // A return accepted before photos were required has no photos and no request: the old direct route still works.
+    afterSaleReturnPhoto: { count: async () => 0 },
+    refundRequest: { findMany: async () => [], update: async () => ({}) },
     customerServiceCase: { update: async (args: unknown) => { caseUpdates.push(args); return {}; } },
     auditLog: { create: async () => ({}) }
   };
@@ -126,6 +129,7 @@ test("only JPEG, PNG and WEBP photos up to 10 MB are accepted", () => {
 });
 
 function receiveFixture(photoCount: number) {
+  const raised: Array<Record<string, unknown>> = [];
   const record = {
     id: "return", orderId: "order", serviceCaseId: "case", orderItemId: "item", status: "APPROVED", receivedAt: null as Date | null,
     restockable: null as boolean | null, refunds: [], events: [], photos: [], commissionAdjustment: null,
@@ -137,6 +141,8 @@ function receiveFixture(photoCount: number) {
     order: { findUnique: async () => order },
     afterSaleEvent: { findUnique: async () => null, create: async () => ({}) },
     afterSaleReturnPhoto: { count: async () => photoCount },
+    refundRecord: { findMany: async () => [] },
+    refundRequest: { findMany: async () => [], create: async ({ data }: { data: Record<string, unknown> }) => { raised.push(data); return { id: "request", status: "PENDING_APPROVAL", ...data }; } },
     inventoryItem: { findUnique: async () => ({ barcode: "B1", updatedAt: new Date("2026-11-02T10:00:00Z") }) },
     afterSaleReturn: {
       update: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(record, data); return record; },
@@ -144,7 +150,7 @@ function receiveFixture(photoCount: number) {
     },
     auditLog: { create: async () => ({}) }
   };
-  return { record, tx };
+  return { record, tx, raised };
 }
 
 test("accepting a returned item is refused without a photo and succeeds with one", async () => {
@@ -161,6 +167,9 @@ test("accepting a returned item is refused without a photo and succeeds with one
     prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(withPhoto.tx)) as typeof prisma.$transaction;
     const result = await new OperationsAfterSalesService(access).execute("order", "return", "RECEIVE", input, "actor");
     assert.equal(result.returns[0]?.status, "RECEIVED");
+    assert.equal(without.raised.length, 0, "a refused acceptance must not raise a refund request");
+    assert.equal(withPhoto.raised.length, 1, "accepting the item raises exactly one refund request");
+    assert.deepEqual({ ...withPhoto.raised[0], reason: "" }, { orderId: "order", serviceCaseId: "case", afterSaleReturnId: "return", kind: "AFTER_SALE_RETURN", amountKsh: 200, reason: "", requestedByAdminUserId: "actor" });
   } finally { prisma.$transaction = original; }
 });
 
@@ -228,4 +237,69 @@ test("photos are served only to order viewers and refund approvers, for the righ
     db.afterSaleReturnPhoto = { findFirst: async () => ({ storageUrl: "gs://another-bucket/returns/x.jpg" }) };
     await assert.rejects(() => service.photoContent("order", "return", "photo", "actor"), /Photo was not found/);
   } finally { db.afterSaleReturnPhoto = saved; }
+});
+
+function refundFixture(requests: Array<{ id: string; status: string; amountKsh: number }>, photoCount: number) {
+  const record = {
+    id: "return", orderId: "order", serviceCaseId: "case", orderItemId: "item", status: "RECEIVED",
+    receivedAt: new Date(Date.now() - 10_000), restockable: true, refunds: [] as Array<{ amountKsh: number }>, events: [], photos: [],
+    commissionAdjustment: null, orderItem: { id: "item", lineTotalKsh: 200 }
+  };
+  const order = { id: "order", status: "COMPLETED", totalKsh: 250, payments: [{ status: "SUCCESS", amountKsh: 250 }], afterSaleReturns: [record], commission: null };
+  const requestUpdates: Array<{ where: { id: string }; data: Record<string, unknown> }> = [];
+  const tx = {
+    $queryRaw: async () => [],
+    order: { findUnique: async () => order, update: async () => ({}) },
+    afterSaleEvent: { findUnique: async () => null, create: async () => ({}) },
+    afterSaleReturn: { update: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(record, data); return record; }, findUniqueOrThrow: async () => record, findMany: async () => [record] },
+    afterSaleReturnPhoto: { count: async () => photoCount },
+    refundRecord: { create: async ({ data }: { data: { amountKsh: number } }) => { record.refunds.push(data); return { id: "refund-record", ...data }; } },
+    refundRequest: { findMany: async () => requests, update: async (args: { where: { id: string }; data: Record<string, unknown> }) => { requestUpdates.push(args); return {}; } },
+    customerServiceCase: { update: async () => ({}) },
+    auditLog: { create: async () => ({}) }
+  };
+  return { tx, requestUpdates, record };
+}
+
+test("a refund for a photographed return is refused until a refund request has been approved", async () => {
+  const original = prisma.$transaction;
+  const access = { requirePermission: async () => ({ adminUser: { linkedEmployeeId: null } }) } as unknown as OperationsAccessService;
+  const evidence = { note: "Verified external receipt", evidenceNote: "Provider statement inspected", refundedAt: new Date(Date.now() - 1_000).toISOString(), amountKsh: 200, externalReference: "ref-1" };
+  try {
+    for (const requests of [[], [{ id: "r1", status: "PENDING_APPROVAL", amountKsh: 200 }], [{ id: "r1", status: "REJECTED", amountKsh: 200 }]]) {
+      const fixture = refundFixture(requests, 3);
+      prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(fixture.tx)) as typeof prisma.$transaction;
+      await assert.rejects(() => new OperationsAfterSalesService(access).execute("order", "return", "REFUND", { ...evidence, idempotencyKey: "k" }, "actor"), /approved refund request/);
+      assert.equal(fixture.record.refunds.length, 0, "no refund may be recorded without an approved request");
+    }
+  } finally { prisma.$transaction = original; }
+});
+
+test("an approved request lets the refund be recorded and is closed when the item is fully refunded", async () => {
+  const original = prisma.$transaction;
+  const access = { requirePermission: async () => ({ adminUser: { linkedEmployeeId: null } }) } as unknown as OperationsAccessService;
+  const evidence = { note: "Verified external receipt", evidenceNote: "Provider statement inspected", refundedAt: new Date(Date.now() - 1_000).toISOString() };
+  try {
+    const fixture = refundFixture([{ id: "r1", status: "APPROVED", amountKsh: 200 }], 3);
+    prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(fixture.tx)) as typeof prisma.$transaction;
+    const service = new OperationsAfterSalesService(access);
+    await service.execute("order", "return", "REFUND", { ...evidence, amountKsh: 50, externalReference: "part-1", idempotencyKey: "k1" }, "actor");
+    assert.equal(fixture.requestUpdates.length, 0, "a partial refund leaves the request open");
+    await assert.rejects(() => service.execute("order", "return", "REFUND", { ...evidence, amountKsh: 151, externalReference: "part-2", idempotencyKey: "k2" }, "actor"), /exceed the amount that was approved/);
+    await service.execute("order", "return", "REFUND", { ...evidence, amountKsh: 150, externalReference: "part-2", idempotencyKey: "k3" }, "actor");
+    assert.equal(fixture.requestUpdates.length, 1);
+    assert.equal(fixture.requestUpdates[0]!.where.id, "r1");
+    assert.equal(fixture.requestUpdates[0]!.data.status, "REFUNDED");
+    assert.equal(fixture.requestUpdates[0]!.data.refundRecordId, "refund-record");
+  } finally { prisma.$transaction = original; }
+});
+
+test("a return that was already requested keeps the gate even if it has no photos", async () => {
+  const original = prisma.$transaction;
+  const access = { requirePermission: async () => ({ adminUser: { linkedEmployeeId: null } }) } as unknown as OperationsAccessService;
+  try {
+    const fixture = refundFixture([{ id: "r1", status: "PENDING_APPROVAL", amountKsh: 200 }], 0);
+    prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(fixture.tx)) as typeof prisma.$transaction;
+    await assert.rejects(() => new OperationsAfterSalesService(access).execute("order", "return", "REFUND", { note: "n", evidenceNote: "e", refundedAt: new Date(Date.now() - 1_000).toISOString(), amountKsh: 200, externalReference: "ref", idempotencyKey: "k" }, "actor"), /approved refund request/);
+  } finally { prisma.$transaction = original; }
 });
