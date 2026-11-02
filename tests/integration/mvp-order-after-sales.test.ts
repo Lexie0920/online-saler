@@ -23,6 +23,7 @@ test("real database MVP order: two garments, payment, verified pickup, staged re
   const { OperationsAccessService } = await import("../../apps/api/src/operations/operations-access.service");
   const { OperationsFulfillmentService } = await import("../../apps/api/src/operations/operations-fulfillment.service");
   const { OperationsAfterSalesService } = await import("../../apps/api/src/operations/operations-after-sales.service");
+  const { OperationsRefundRequestService } = await import("../../apps/api/src/operations/operations-refund-request.service");
   const { hashPassword, issueOperationsAccessToken } = await import("../../apps/api/src/operations/operations-access-policy");
   const key = `mvp-${randomUUID()}`;
   const customerIds: string[] = [];
@@ -65,6 +66,17 @@ test("real database MVP order: two garments, payment, verified pickup, staged re
     adminIds.push(admin.id);
     const unauthorized = await prisma.adminUser.create({ data: { loginAccount: `${key}-no-permission`, name: "No order permission" } });
     adminIds.push(unauthorized.id);
+    // The person who approves refunds is deliberately a different account from the counter
+    // staff who accept the item: whoever raised a refund request cannot approve it.
+    let approvePermission = await prisma.permission.findUnique({ where: { code: "customer-service.refund-approve" } });
+    if (!approvePermission) {
+      approvePermission = await prisma.permission.create({ data: { code: "customer-service.refund-approve", module: "customer-service" } });
+      createdPermissionIds.push(approvePermission.id);
+    }
+    const approverRole = await prisma.role.create({ data: { code: `${key}-approver-role`, name: "MVP isolated refund approver", permissions: { create: [{ permissionId: approvePermission.id }] } } });
+    roleIds.push(approverRole.id);
+    const approver = await prisma.adminUser.create({ data: { loginAccount: `${key}-approver`, name: "MVP integration refund approver", passwordHash: hashPassword(`${key}-approver-password`), roles: { create: { roleId: approverRole.id } } } });
+    adminIds.push(approver.id);
     const access = new OperationsAccessService();
     const token = issueOperationsAccessToken(admin.id, admin.passwordHash!);
     const actorId = await access.requireAccessToken(`Bearer ${token.accessToken}`);
@@ -73,6 +85,7 @@ test("real database MVP order: two garments, payment, verified pickup, staged re
     await assert.rejects(access.requirePermission(unauthorized.id, "orders.after-sale"), /permission/);
     const fulfillment = new OperationsFulfillmentService(access);
     const afterSales = new OperationsAfterSalesService(access);
+    const refundRequests = new OperationsRefundRequestService(access);
     const actor = { adminUserId: actorId, note: "Integration test operator action" };
 
     const customer = await prisma.customer.create({ data: {
@@ -198,6 +211,14 @@ test("real database MVP order: two garments, payment, verified pickup, staged re
       await prisma.afterSaleReturnPhoto.create({ data: { afterSaleReturnId: record.id, storageUrl: `gs://integration-test/returns/${record.id}/photo.jpg`, contentType: "image/jpeg", sizeBytes: 1024, uploadedByAdminUserId: actorId } });
       await assert.rejects(afterSales.execute(order.id, record.id, "RECEIVE", { idempotencyKey: `${key}-${suffix}-wrong-receive`, note: "Wrong physical garment scanned", receivedBarcode: "WRONG-RETURN", restockable: true }, actorId), /mismatched returned barcode/);
       await afterSales.execute(order.id, record.id, "RECEIVE", { idempotencyKey: `${key}-${suffix}-receive`, note: "Original garment received and inspected", receivedBarcode: item.snapshot!.barcode!, restockable: true }, actorId);
+      // Accepting the item opened a refund request. Nothing can be refunded until someone else approves it.
+      const refundRequest = await prisma.refundRequest.findFirstOrThrow({ where: { afterSaleReturnId: record.id } });
+      assert.equal(refundRequest.status, "PENDING_APPROVAL");
+      assert.equal(refundRequest.requestedByAdminUserId, actorId);
+      assert.equal(refundRequest.amountKsh, item.lineTotalKsh);
+      await assert.rejects(afterSales.execute(order.id, record.id, "REFUND", { idempotencyKey: `${key}-${suffix}-early-refund`, note: "Try to refund before approval", amountKsh: 1, externalReference: `${key}-${suffix}-early`, evidenceNote: "Not approved yet", refundedAt: new Date().toISOString() }, actorId), /waiting for approval/);
+      await assert.rejects(refundRequests.review(refundRequest.id, { adminUserId: actorId, approved: true, reviewNote: "Self approval" }), /permission/);
+      await refundRequests.review(refundRequest.id, { adminUserId: approver.id, approved: true, reviewNote: "Photos show the original garment" });
       return await prisma.afterSaleReturn.findUniqueOrThrow({ where: { id: record.id } });
     }
     const returnA = await requestAndReceive(itemA, "a");
@@ -222,6 +243,7 @@ test("real database MVP order: two garments, payment, verified pickup, staged re
     assert.equal(await prisma.refundRecord.count({ where: { afterSaleReturnId: returnA.id } }), 1);
     const remainingRefund = refundInput("a-refund-rest", 199, `${key}-refund-a-rest`);
     await afterSales.execute(order.id, returnA.id, "REFUND", remainingRefund, actorId);
+    assert.deepEqual((await prisma.refundRequest.findMany({ where: { afterSaleReturnId: returnA.id } })).map((row) => row.status), ["REFUNDED"], "the approved request is closed once the full amount is recorded");
     assert.equal((await prisma.afterSaleReturn.findUniqueOrThrow({ where: { id: returnA.id } })).status, "REFUND_RECORDED");
     assert.equal((await prisma.customerServiceCase.findUniqueOrThrow({ where: { id: returnA.serviceCaseId } })).status, "RESOLVED");
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status, "COMPLETED", "Refunding one item must not mark the whole order refunded");

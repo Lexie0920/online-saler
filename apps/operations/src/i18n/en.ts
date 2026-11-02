@@ -3239,5 +3239,8 @@ export const enDictionary: Record<string, string> = {
   "请至少上传 1 张退回商品照片。": "Add at least 1 photo of the returned item.",
   "退回商品照片（{count}）": "Photos of the returned item ({count})",
   "退回商品照片 {number}": "Returned item photo {number}",
+  "这笔退货验收时没有拍照（较早的记录）。": "No photos were taken when this return was accepted (older record).",
+  "退货退款请在订单页登记": "Record this return refund on the order page",
+  "退货产生的退款申请会在仓库验收退货后自动出现，附带验收照片。批准之后，退款要在订单页的退货卡片里登记，这样佣金和退货状态才会一起更新。": "Refund requests for returns appear automatically once the warehouse accepts the item, with the acceptance photos. After approval, record the refund on the return card on the order page so the commission and the return status are updated together.",
   "照片读取失败": "Photo could not be loaded",
 };

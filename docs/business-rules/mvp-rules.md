@@ -153,6 +153,16 @@ stored in the private product-image bucket (only their path is in the database)
 and are shown on the order's returns card to staff who can view orders. This
 changes no money rule: refunds stay manual and are still recorded afterwards.
 
+2026-11-02 (owner request, step 2): accepting a returned item also opens a
+refund request for that item's price, raised by the person who accepted it. The
+approver reviews the photos and approves or rejects it with a note; the person
+who raised it cannot approve it. A refund for a returned item can only be
+recorded once its request is approved, and only up to the approved amount. It is
+recorded on the order page (not on the refund approvals page), because only that
+path reverses the affiliate commission, updates the return status and applies
+the restock rules. Returns accepted before this rule have no request and keep
+the old behaviour. Refunds are still made by hand in M-Pesa.
+
 ## Refunds
 
 - The system never moves money. A refund is executed in M-Pesa first and then

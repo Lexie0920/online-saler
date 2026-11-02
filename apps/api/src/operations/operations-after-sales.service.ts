@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
-import { ActorType, AfterSaleReturnReason, AfterSaleReturnStatus, CommissionAdjustmentKind, CommissionStatus, CustomerServiceCaseStatus, CustomerServiceCaseType, CustomerServiceIssueType, FulfillmentNodeStatus, InventoryItemStatus, InventoryMovementType, OrderStatus, PaymentStatus, Prisma, ProductStatus, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
+import { ActorType, AfterSaleReturnReason, AfterSaleReturnStatus, CommissionAdjustmentKind, CommissionStatus, CustomerServiceCaseStatus, CustomerServiceCaseType, CustomerServiceIssueType, FulfillmentNodeStatus, InventoryItemStatus, InventoryMovementType, OrderStatus, PaymentStatus, Prisma, ProductStatus, RefundKind, RefundRequestStatus, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
 import { OperationsAccessService } from "./operations-access.service";
-import { assertRefundAmount, assertReturnPhotoCount, assertReturnWindow, commissionShares, requiredText, RETURN_PHOTO_MAX, RETURN_REASONS, returnPhotoContentType } from "./operations-after-sales.rules";
+import { assertRefundAmount, assertReturnPhotoCount, refundGate, assertReturnWindow, commissionShares, requiredText, RETURN_PHOTO_MAX, RETURN_REASONS, returnPhotoContentType } from "./operations-after-sales.rules";
 import { ProductImageStorageService } from "../product/product-image-storage.service";
 import { refreshWarehouseLocationStatuses, WAREHOUSE_OCCUPYING_STATUSES } from "./warehouse-capacity";
 import { scopedNodeId, storeScopeFor } from "./store-scope";
@@ -90,6 +90,7 @@ export class OperationsAfterSalesService {
           const inventory = await tx.inventoryItem.findUnique({ where: { productId: record!.orderItem.productId } });
           if (input.restockable && (!inventory || barcode !== inventory.barcode || barcode !== record!.orderItem.snapshot?.barcode)) throw new BadRequestException("A mismatched returned barcode cannot be restocked. Record it as not restockable for review.");
           await tx.afterSaleReturn.update({ where: { id: record!.id }, data: { status: AfterSaleReturnStatus.RECEIVED, receivedAt: now, receivedByAdminUserId: adminUserId, receivedBarcode: barcode, restockable: input.restockable, inspectionNote: note, inventoryUpdatedAt: inventory?.updatedAt ?? null } });
+          await this.openRefundRequest(tx, record!, adminUserId, employeeId, note);
         } else if (action === "REFUND") {
           await this.refund(tx, order, record!, input, adminUserId, now);
         } else if (action === "RESTOCK") {
@@ -171,7 +172,16 @@ export class OperationsAfterSalesService {
     const totalRefunded = order.afterSaleReturns.flatMap((row) => row.refunds).reduce((sum, row) => sum + row.amountKsh, 0);
     const paymentAmount = order.payments.filter((row) => row.status === PaymentStatus.SUCCESS).reduce((sum, row) => sum + row.amountKsh, 0);
     assertRefundAmount(input.amountKsh, record.orderItem.lineTotalKsh, itemRefunded, order.totalKsh, totalRefunded, paymentAmount);
-    await tx.refundRecord.create({ data: { orderId: order.id, afterSaleReturnId: record.id, amountKsh: input.amountKsh, externalReference, evidenceNote, refundedAt, recordedByAdminUserId: adminUserId } });
+    // The refund must have been approved first. The order is already locked, so
+    // lock the requests too: nobody can withdraw one while it is being used.
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "RefundRequest" WHERE "afterSaleReturnId" = ${record.id} FOR UPDATE`);
+    const requests = await tx.refundRequest.findMany({ where: { afterSaleReturnId: record.id }, select: { id: true, status: true, amountKsh: true } });
+    const gate = refundGate(requests, itemRefunded, input.amountKsh);
+    const refundRecord = await tx.refundRecord.create({ data: { orderId: order.id, afterSaleReturnId: record.id, amountKsh: input.amountKsh, externalReference, evidenceNote, refundedAt, recordedByAdminUserId: adminUserId } });
+    if (gate.request?.id && gate.completes) {
+      await tx.refundRequest.update({ where: { id: gate.request.id }, data: { status: RefundRequestStatus.REFUNDED, refundRecordId: refundRecord.id, completedAt: now } });
+      await tx.auditLog.create({ data: { actorType: ActorType.EMPLOYEE, actorId: null, actorAdminUserId: adminUserId, sourceApp: SourceApp.OPERATIONS, module: "customer-service", entityType: "RefundRequest", entityId: gate.request.id, action: "REFUND_REQUEST_COMPLETE", beforeJson: json({ status: gate.request.status }), afterJson: json({ status: RefundRequestStatus.REFUNDED, refundRecordId: refundRecord.id }), reason: evidenceNote } });
+    }
     // The existing return policy has no negotiated partial-compensation settlement.
     // Keep the case and commission hold open until the sold item's full price is recorded.
     const fullyRefunded = itemRefunded + input.amountKsh === record.orderItem.lineTotalKsh;
@@ -223,6 +233,20 @@ export class OperationsAfterSalesService {
       afterJson: { inventoryStatus: InventoryItemStatus.AVAILABLE, locationId: destination.id, productStatus: ProductStatus.REVIEW_PENDING, afterSaleReturnId: record.id }
     } });
     await tx.afterSaleReturn.update({ where: { id: record.id }, data: { restockedAt: now, restockedByAdminUserId: adminUserId, restockedLocationId: destination.id } });
+  }
+
+  /**
+   * Accepting a returned item opens the refund request for it, so the person who
+   * approves refunds sees the photos and decides. Nothing is paid here. The
+   * person who accepted the item is recorded as the requester, which stops them
+   * from also approving it.
+   */
+  private async openRefundRequest(tx: Prisma.TransactionClient, record: Return, adminUserId: string, employeeId: string | null, note: string) {
+    const live = await tx.refundRequest.count({ where: { afterSaleReturnId: record.id, status: { in: [RefundRequestStatus.PENDING_APPROVAL, RefundRequestStatus.APPROVED, RefundRequestStatus.REFUNDED] } } });
+    if (live > 0) return;
+    const reason = `Returned item accepted at the counter: ${note}`.slice(0, 2000);
+    const created = await tx.refundRequest.create({ data: { orderId: record.orderId, serviceCaseId: record.serviceCaseId, afterSaleReturnId: record.id, kind: RefundKind.AFTER_SALE_RETURN, amountKsh: record.orderItem.lineTotalKsh, reason, requestedByAdminUserId: adminUserId } });
+    await tx.auditLog.create({ data: { actorType: ActorType.EMPLOYEE, actorId: employeeId, actorAdminUserId: adminUserId, sourceApp: SourceApp.OPERATIONS, module: "customer-service", entityType: "RefundRequest", entityId: created.id, action: "REFUND_REQUEST_CREATE", beforeJson: {}, afterJson: json({ status: created.status, orderId: created.orderId, amountKsh: created.amountKsh, afterSaleReturnId: record.id }), reason } });
   }
 
   private closeCase(tx: Prisma.TransactionClient, id: string, now: Date) {

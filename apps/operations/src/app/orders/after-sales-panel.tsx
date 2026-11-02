@@ -31,7 +31,7 @@ type AfterSalesOrder = {
     inventoryItem?: { barcode: string } | null;
   }>;
 };
-type ReturnPhoto = { id: string; contentType: string; sizeBytes: number; createdAt: string };
+export type ReturnPhoto = { id: string; contentType: string; sizeBytes: number; createdAt: string };
 type ReturnRecord = {
   id: string;
   orderItemId: string;
@@ -373,7 +373,7 @@ function AfterSaleDialog({ action, order, eligibleItems, token, onClose, onDone 
 }
 
 /** The photos are private, so each one is fetched with the employee's session and shown from memory. */
-function ReturnPhotoStrip({ orderId, returnId, photos, token }: { orderId: string; returnId: string; photos: ReturnPhoto[]; token: string }) {
+export function ReturnPhotoStrip({ orderId, returnId, photos, token }: { orderId: string; returnId: string; photos: ReturnPhoto[]; token: string }) {
   return (
     <div className="flex flex-col gap-2">
       <p className="font-medium text-sm">{t("退回商品照片（{count}）", { count: photos.length })}</p>

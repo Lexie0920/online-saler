@@ -40,7 +40,8 @@ const REQUEST_INCLUDE = {
     }
   },
   serviceCase: { select: { id: true, title: true, status: true, caseType: true } },
-  afterSaleReturn: { select: { id: true, status: true, orderItemId: true } },
+  // Photo metadata only: the picture itself is served by the after-sales photo endpoint.
+  afterSaleReturn: { select: { id: true, status: true, orderItemId: true, photos: { select: { id: true, contentType: true, sizeBytes: true, createdAt: true }, orderBy: { createdAt: "asc" as const } } } },
   requestedByAdminUser: { select: { id: true, name: true } },
   reviewedByAdminUser: { select: { id: true, name: true } },
   refundRecord: { select: { id: true, externalReference: true, refundedAt: true, amountKsh: true } }
@@ -147,9 +148,15 @@ export class OperationsRefundRequestService {
         const record = await tx.afterSaleReturn.findUnique({ where: { id: afterSaleReturnId }, select: { orderId: true, status: true } });
         if (!record) throw new NotFoundException("Return was not found.");
         if (record.orderId !== orderId) throw new BadRequestException("That return belongs to a different order.");
-        if (record.status === AfterSaleReturnStatus.REJECTED) {
-          throw new BadRequestException("A rejected return cannot be refunded.");
+        // Accepting the returned item opens its request automatically; a manual
+        // one is only for the case where that request was rejected or withdrawn.
+        if (record.status !== AfterSaleReturnStatus.RECEIVED) {
+          throw new BadRequestException("A refund can only be requested for a return whose item has been received and inspected.");
         }
+        const open = await tx.refundRequest.count({
+          where: { afterSaleReturnId, status: { in: [RefundRequestStatus.PENDING_APPROVAL, RefundRequestStatus.APPROVED, RefundRequestStatus.REFUNDED] } }
+        });
+        if (open > 0) throw new ConflictException("This return already has a refund request.");
       }
 
       const created = await tx.refundRequest.create({
@@ -256,6 +263,12 @@ export class OperationsRefundRequestService {
         const existing = await this.lockRequest(tx, requestId);
         if (existing.status !== RefundRequestStatus.APPROVED) {
           throw new ConflictException("Only an approved request can be recorded as refunded.");
+        }
+        // A refund for a returned item must be recorded on the order page: only
+        // that path reverses the affiliate commission, closes the return and
+        // keeps the restock rules. Recording it here would skip all three.
+        if (existing.afterSaleReturnId) {
+          throw new ConflictException("This is a refund for a returned item. Record it on the order page so the return, the commission and the stock stay in step.");
         }
         await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Order" WHERE "id" = ${existing.orderId} FOR UPDATE`);
         if (refundedAt < existing.reviewedAt!) {

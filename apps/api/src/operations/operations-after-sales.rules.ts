@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { RETURN_REQUEST_WINDOW_HOURS } from "@online-saler/business-rules";
 
 export const RETURN_REASONS = ["WRONG_ITEM", "PHOTO_MISMATCH", "UNDISCLOSED_DEFECT", "MEASUREMENT_DIFFERENCE", "DELIVERY_DAMAGE", "NOT_SATISFIED"] as const;
@@ -50,4 +50,31 @@ export function returnPhotoContentType(header: string | undefined, size: number)
   if (!type || !(RETURN_PHOTO_TYPES as readonly string[]).includes(type)) throw new BadRequestException("Photos must be JPEG, PNG or WEBP images.");
   if (!Number.isInteger(size) || size <= 0 || size > RETURN_PHOTO_MAX_BYTES) throw new BadRequestException("A photo must be between 1 byte and 10 MB.");
   return type as (typeof RETURN_PHOTO_TYPES)[number];
+}
+
+/**
+ * A refund for a returned item needs an approved refund request.
+ *
+ * Accepting a return opens a request (see OperationsAfterSalesService). Whoever
+ * reviews the photos approves or rejects it, and only then may the refund be
+ * logged. Returns accepted before this rule existed have no request at all and
+ * keep working the old way, so `request` is null for them.
+ *
+ * Partial recordings are allowed up to the approved amount: the request is
+ * finished only when the last of it has been recorded.
+ */
+export type ReturnRefundRequest = { id: string; status: string; amountKsh: number };
+
+export function refundGate(requests: readonly ReturnRefundRequest[], alreadyRefundedKsh: number, amountKsh: number): { request: ReturnRefundRequest | null; completes: boolean } {
+  if (requests.length === 0) return { request: null, completes: false };
+  const approved = requests.find((row) => row.status === "APPROVED");
+  if (!approved) {
+    if (requests.some((row) => row.status === "PENDING_APPROVAL")) throw new ConflictException("The refund request for this return is still waiting for approval. Ask the approver to review the photos first.");
+    if (requests.some((row) => row.status === "REFUNDED")) throw new ConflictException("The approved refund for this return has already been recorded in full.");
+    throw new ConflictException("The refund request for this return was rejected or withdrawn. Raise a new refund request before recording a refund.");
+  }
+  if (alreadyRefundedKsh + amountKsh > approved.amountKsh) {
+    throw new ConflictException(`The approved refund is KSh ${approved.amountKsh}; recording KSh ${alreadyRefundedKsh + amountKsh} in total would go beyond it.`);
+  }
+  return { request: approved, completes: alreadyRefundedKsh + amountKsh === approved.amountKsh };
 }

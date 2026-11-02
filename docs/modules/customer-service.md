@@ -128,6 +128,11 @@ Guardrails, all tested in `operations-refund-request.spec.ts`:
 - A rejected or cancelled request releases the amount it was holding.
 - Only an approved request can be recorded as refunded, and the recorded time
   cannot be before the approval or in the future.
+- A request for a returned item is opened automatically when the warehouse
+  accepts the item (with its photos). It cannot be recorded as refunded here:
+  return refunds are recorded on the order page so the commission, the return
+  status and the restock rules all follow. A manual request for a return is only
+  possible once the item has been received, and not while another live one exists.
 - The M-Pesa reference is unique; recording the same payout twice is refused.
 - **Nothing in this system ever initiates an M-Pesa transfer.**
 

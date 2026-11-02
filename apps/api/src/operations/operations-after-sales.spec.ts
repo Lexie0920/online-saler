@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertRefundAmount, assertReturnPhotoCount, assertReturnWindow, commissionShares, requiredText, returnPhotoContentType } from "./operations-after-sales.rules";
+import { assertRefundAmount, assertReturnPhotoCount, assertReturnWindow, commissionShares, refundGate, requiredText, returnPhotoContentType } from "./operations-after-sales.rules";
 import { OperationsAfterSalesController } from "./operations-after-sales.controller";
 import { OperationsAfterSalesService } from "./operations-after-sales.service";
 import { OperationsAccessService } from "./operations-access.service";
@@ -87,6 +87,8 @@ test("a 1/200 refund installment cannot close the case or restock; the remaining
       findUniqueOrThrow: async () => record, findMany: async () => [record]
     },
     refundRecord: { create: async ({ data }: { data: { amountKsh: number } }) => { record.refunds.push(data); return data; } },
+    // A return accepted before refund requests existed has none, and keeps working.
+    refundRequest: { findMany: async () => [] },
     customerServiceCase: { update: async (args: unknown) => { caseUpdates.push(args); return {}; } },
     auditLog: { create: async () => ({}) }
   };
@@ -126,6 +128,8 @@ test("only JPEG, PNG and WEBP photos up to 10 MB are accepted", () => {
 });
 
 function receiveFixture(photoCount: number) {
+  const requests: Array<Record<string, unknown>> = [];
+  const audits: Array<Record<string, unknown>> = [];
   const record = {
     id: "return", orderId: "order", serviceCaseId: "case", orderItemId: "item", status: "APPROVED", receivedAt: null as Date | null,
     restockable: null as boolean | null, refunds: [], events: [], photos: [], commissionAdjustment: null,
@@ -137,14 +141,18 @@ function receiveFixture(photoCount: number) {
     order: { findUnique: async () => order },
     afterSaleEvent: { findUnique: async () => null, create: async () => ({}) },
     afterSaleReturnPhoto: { count: async () => photoCount },
+    refundRequest: {
+      count: async () => requests.length,
+      create: async ({ data }: { data: Record<string, unknown> }) => { const row = { id: "request", status: "PENDING_APPROVAL", ...data }; requests.push(row); return row; }
+    },
     inventoryItem: { findUnique: async () => ({ barcode: "B1", updatedAt: new Date("2026-11-02T10:00:00Z") }) },
     afterSaleReturn: {
       update: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(record, data); return record; },
       findUniqueOrThrow: async () => record, findMany: async () => [record]
     },
-    auditLog: { create: async () => ({}) }
+    auditLog: { create: async ({ data }: { data: Record<string, unknown> }) => { audits.push(data); return {}; } }
   };
-  return { record, tx };
+  return { record, tx, requests, audits };
 }
 
 test("accepting a returned item is refused without a photo and succeeds with one", async () => {
@@ -228,4 +236,80 @@ test("photos are served only to order viewers and refund approvers, for the righ
     db.afterSaleReturnPhoto = { findFirst: async () => ({ storageUrl: "gs://another-bucket/returns/x.jpg" }) };
     await assert.rejects(() => service.photoContent("order", "return", "photo", "actor"), /Photo was not found/);
   } finally { db.afterSaleReturnPhoto = saved; }
+});
+
+test("accepting a returned item opens one pending refund request for the item's price, raised by the person at the counter", async () => {
+  const original = prisma.$transaction;
+  const access = { requirePermission: async () => ({ adminUser: { linkedEmployeeId: "employee" } }) } as unknown as OperationsAccessService;
+  try {
+    const fixture = receiveFixture(2);
+    prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(fixture.tx)) as typeof prisma.$transaction;
+    await new OperationsAfterSalesService(access).execute("order", "return", "RECEIVE", { note: "Checked at the counter", receivedBarcode: "B1", restockable: true, idempotencyKey: "receive-1" }, "counter-staff");
+    assert.equal(fixture.requests.length, 1);
+    assert.deepEqual(
+      { orderId: fixture.requests[0]?.orderId, afterSaleReturnId: fixture.requests[0]?.afterSaleReturnId, serviceCaseId: fixture.requests[0]?.serviceCaseId, amountKsh: fixture.requests[0]?.amountKsh, status: fixture.requests[0]?.status, requestedByAdminUserId: fixture.requests[0]?.requestedByAdminUserId },
+      { orderId: "order", afterSaleReturnId: "return", serviceCaseId: "case", amountKsh: 200, status: "PENDING_APPROVAL", requestedByAdminUserId: "counter-staff" }
+    );
+    assert.ok(fixture.audits.some((row) => row.entityType === "RefundRequest" && row.action === "REFUND_REQUEST_CREATE"));
+
+    // A return that somehow already has a live request must not get a second one.
+    const again = receiveFixture(2);
+    again.requests.push({ id: "existing", status: "APPROVED" });
+    prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(again.tx)) as typeof prisma.$transaction;
+    await new OperationsAfterSalesService(access).execute("order", "return", "RECEIVE", { note: "Checked at the counter", receivedBarcode: "B1", restockable: true, idempotencyKey: "receive-2" }, "counter-staff");
+    assert.equal(again.requests.length, 1);
+  } finally { prisma.$transaction = original; }
+});
+
+test("the refund gate: legacy returns pass, otherwise the refund must be inside an approved request", () => {
+  assert.deepEqual(refundGate([], 0, 200), { request: null, completes: false });
+  assert.throws(() => refundGate([{ id: "r", status: "PENDING_APPROVAL", amountKsh: 200 }], 0, 200), /waiting for approval/);
+  assert.throws(() => refundGate([{ id: "r", status: "REJECTED", amountKsh: 200 }], 0, 200), /rejected or withdrawn/);
+  assert.throws(() => refundGate([{ id: "r", status: "CANCELLED", amountKsh: 200 }], 0, 200), /rejected or withdrawn/);
+  assert.throws(() => refundGate([{ id: "r", status: "REFUNDED", amountKsh: 200 }], 200, 1), /already been recorded in full/);
+  const approved = { id: "r", status: "APPROVED", amountKsh: 200 };
+  assert.throws(() => refundGate([approved], 0, 201), /go beyond/);
+  assert.throws(() => refundGate([approved], 150, 51), /go beyond/);
+  assert.deepEqual(refundGate([approved], 0, 1), { request: approved, completes: false });
+  assert.deepEqual(refundGate([approved], 1, 199), { request: approved, completes: true });
+  // An old rejected request does not hide a newer approved one.
+  assert.deepEqual(refundGate([{ id: "old", status: "REJECTED", amountKsh: 200 }, approved], 0, 200), { request: approved, completes: true });
+});
+
+test("recording a refund needs the approved request, and the request is closed only when the approved amount is fully recorded", async () => {
+  const original = prisma.$transaction;
+  const receivedAt = new Date(Date.now() - 10_000);
+  const record = { id: "return", orderId: "order", serviceCaseId: "case", orderItemId: "item", status: "RECEIVED", receivedAt, restockable: true, refunds: [] as Array<{ amountKsh: number }>, events: [], commissionAdjustment: null, orderItem: { id: "item", lineTotalKsh: 200 } };
+  const order = { id: "order", status: "COMPLETED", totalKsh: 250, payments: [{ status: "SUCCESS", amountKsh: 250 }], afterSaleReturns: [record], commission: null };
+  const request = { id: "request", status: "PENDING_APPROVAL", amountKsh: 200, refundRecordId: null as string | null };
+  const requestUpdates: Array<Record<string, unknown>> = [];
+  const audits: Array<Record<string, unknown>> = [];
+  const tx = {
+    $queryRaw: async () => [],
+    order: { findUnique: async () => order, update: async () => ({}) },
+    afterSaleEvent: { findUnique: async () => null, create: async () => ({}) },
+    afterSaleReturn: { update: async ({ data }: { data: { status: string } }) => { Object.assign(record, data); return record; }, findUniqueOrThrow: async () => record, findMany: async () => [record] },
+    refundRecord: { create: async ({ data }: { data: { amountKsh: number } }) => { record.refunds.push(data); return { id: `record-${record.refunds.length}`, ...data }; } },
+    refundRequest: { findMany: async () => [{ ...request }], update: async ({ data }: { data: Record<string, unknown> }) => { requestUpdates.push(data); Object.assign(request, data); return request; } },
+    customerServiceCase: { update: async () => ({}) },
+    auditLog: { create: async ({ data }: { data: Record<string, unknown> }) => { audits.push(data); return {}; } }
+  };
+  prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(tx)) as typeof prisma.$transaction;
+  try {
+    const access = { requirePermission: async () => ({ adminUser: { linkedEmployeeId: null } }) } as unknown as OperationsAccessService;
+    const service = new OperationsAfterSalesService(access);
+    const evidence = { note: "Verified external receipt", evidenceNote: "Provider statement inspected", refundedAt: new Date(Date.now() - 1_000).toISOString() };
+    // Waiting for approval: nothing is recorded.
+    await assert.rejects(() => service.execute("order", "return", "REFUND", { ...evidence, amountKsh: 200, externalReference: "wait", idempotencyKey: "r-wait" }, "actor"), /waiting for approval/);
+    assert.equal(record.refunds.length, 0);
+    // Approved: a part is recorded and the request stays open; the rest closes it.
+    request.status = "APPROVED";
+    await service.execute("order", "return", "REFUND", { ...evidence, amountKsh: 1, externalReference: "part-1", idempotencyKey: "r-1" }, "actor");
+    assert.equal(requestUpdates.length, 0, "a partial recording leaves the request open");
+    await service.execute("order", "return", "REFUND", { ...evidence, amountKsh: 199, externalReference: "part-2", idempotencyKey: "r-2" }, "actor");
+    assert.equal(requestUpdates.length, 1);
+    assert.equal(requestUpdates[0]?.status, "REFUNDED");
+    assert.equal(requestUpdates[0]?.refundRecordId, "record-2");
+    assert.ok(audits.some((row) => row.entityType === "RefundRequest" && row.action === "REFUND_REQUEST_COMPLETE"));
+  } finally { prisma.$transaction = original; }
 });

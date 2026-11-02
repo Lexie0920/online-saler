@@ -34,6 +34,8 @@ type HarnessOptions = {
   refundedKsh?: number;
   existingRequests?: Array<{ amountKsh: number; status: string }>;
   request?: Partial<RequestRow>;
+  returnStatus?: string;
+  liveRequestsForReturn?: number;
 };
 
 function harness(t: TestContext, options: HarnessOptions = {}) {
@@ -88,7 +90,7 @@ function harness(t: TestContext, options: HarnessOptions = {}) {
         return data;
       }
     },
-    afterSaleReturn: { findUnique: async () => ({ orderId: "order-1", status: "RECEIVED" }) },
+    afterSaleReturn: { findUnique: async () => ({ orderId: "order-1", status: options.returnStatus ?? "RECEIVED" }) },
     refundRecord: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         events.push("create-refund-record");
@@ -97,6 +99,7 @@ function harness(t: TestContext, options: HarnessOptions = {}) {
       }
     },
     refundRequest: {
+      count: async () => options.liveRequestsForReturn ?? 0,
       findUnique: async () => {
         events.push("read-request");
         return { ...row };
@@ -344,4 +347,38 @@ test("a decision that has already been made cannot be made again", async (t) => 
     ConflictException
   );
   assert.equal(h.read().status, "REJECTED");
+});
+
+test("a refund request for a return needs the returned item to have been received", async (t) => {
+  for (const returnStatus of ["REQUESTED", "APPROVED", "REJECTED"]) {
+    const h = harness(t, { returnStatus });
+    await assert.rejects(h.service.create({ ...CREATE, afterSaleReturnId: "return-1" }), /received and inspected/);
+    assert.equal(h.read().status, "PENDING_APPROVAL", "nothing was created");
+    assert.ok(!h.events.includes("create-request"));
+  }
+});
+
+test("a received return that already has a live refund request cannot get a second one", async (t) => {
+  const h = harness(t, { liveRequestsForReturn: 1 });
+  await assert.rejects(h.service.create({ ...CREATE, afterSaleReturnId: "return-1" }), ConflictException);
+  assert.ok(!h.events.includes("create-request"));
+});
+
+test("a received return whose request was rejected or withdrawn can be given a new one", async (t) => {
+  const h = harness(t, { liveRequestsForReturn: 0 });
+  const created = await h.service.create({ ...CREATE, afterSaleReturnId: "return-1" });
+  assert.equal(created.afterSaleReturnId, "return-1");
+  assert.equal(created.status, "PENDING_APPROVAL");
+});
+
+test("a refund for a returned item cannot be recorded from the refund approvals page", async (t) => {
+  // Recording it here would skip the commission reversal, the return status
+  // and the restock rules, which only the order page applies.
+  const h = harness(t, { request: { status: "APPROVED", afterSaleReturnId: "return-1", requestedByAdminUserId: "agent", reviewedByAdminUserId: "finance", reviewedAt: new Date(Date.now() - 60_000) } });
+  await assert.rejects(
+    h.service.complete("request-1", { adminUserId: "finance", externalReference: "QK9", evidenceNote: "sent", refundedAt: new Date().toISOString() }),
+    /order page/
+  );
+  assert.equal(h.refundRecords.length, 0);
+  assert.equal(h.read().status, "APPROVED");
 });

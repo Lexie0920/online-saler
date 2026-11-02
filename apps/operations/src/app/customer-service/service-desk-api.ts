@@ -227,6 +227,8 @@ export type RefundRequestRow = {
   completedAt?: string | null;
   order?: { id: string; orderNumber: string; totalKsh: number; customer?: { displayName?: string | null; phone?: string | null } | null } | null;
   serviceCase?: { id: string; title: string; status: string } | null;
+  /** Set when the refund is for a returned item; the photos were taken when it was accepted. */
+  afterSaleReturn?: { id: string; status: string; photos: Array<{ id: string; contentType: string; sizeBytes: number; createdAt: string }> } | null;
   requestedByAdminUser?: { name: string } | null;
   reviewedByAdminUser?: { name: string } | null;
   refundRecord?: { externalReference: string; refundedAt: string; amountKsh: number } | null;
