@@ -193,6 +193,9 @@ test("real database MVP order: two garments, payment, verified pickup, staged re
       const retry = await afterSales.execute(order.id, undefined, "REQUEST", request, actorId);
       assert.equal(retry.returns.filter((row) => row.orderItemId === item.id).length, 1);
       await afterSales.execute(order.id, record.id, "DECISION", { idempotencyKey: `${key}-${suffix}-decision`, note: "Evidence meets existing return policy", approved: true }, actorId);
+      // The counter must photograph the returned garment before it can be accepted.
+      await assert.rejects(afterSales.execute(order.id, record.id, "RECEIVE", { idempotencyKey: `${key}-${suffix}-no-photo`, note: "Counter staff did not take a photo", receivedBarcode: item.snapshot!.barcode!, restockable: true }, actorId), /at least 1 photo/);
+      await prisma.afterSaleReturnPhoto.create({ data: { afterSaleReturnId: record.id, storageUrl: `gs://integration-test/returns/${record.id}/photo.jpg`, contentType: "image/jpeg", sizeBytes: 1024, uploadedByAdminUserId: actorId } });
       await assert.rejects(afterSales.execute(order.id, record.id, "RECEIVE", { idempotencyKey: `${key}-${suffix}-wrong-receive`, note: "Wrong physical garment scanned", receivedBarcode: "WRONG-RETURN", restockable: true }, actorId), /mismatched returned barcode/);
       await afterSales.execute(order.id, record.id, "RECEIVE", { idempotencyKey: `${key}-${suffix}-receive`, note: "Original garment received and inspected", receivedBarcode: item.snapshot!.barcode!, restockable: true }, actorId);
       return await prisma.afterSaleReturn.findUniqueOrThrow({ where: { id: record.id } });
@@ -267,6 +270,7 @@ test("real database MVP order: two garments, payment, verified pickup, staged re
     await prisma.refundRequest.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma.commissionAdjustment.deleteMany({ where: { afterSaleReturnId: { in: returnIds } } });
     await prisma.refundRecord.deleteMany({ where: { OR: [{ afterSaleReturnId: { in: returnIds } }, { orderId: { in: orderIds } }] } });
+    await prisma.afterSaleReturnPhoto.deleteMany({ where: { afterSaleReturnId: { in: returnIds } } });
     await prisma.afterSaleReturn.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma.customerServiceCase.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma.mpesaCallback.deleteMany({ where: { providerCheckoutRequestId: callbackId } });
