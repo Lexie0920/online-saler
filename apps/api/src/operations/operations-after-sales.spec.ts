@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertRefundAmount, assertReturnWindow, commissionShares, requiredText } from "./operations-after-sales.rules";
+import { assertRefundAmount, assertReturnPhotoCount, assertReturnWindow, commissionShares, requiredText, returnPhotoContentType } from "./operations-after-sales.rules";
 import { OperationsAfterSalesController } from "./operations-after-sales.controller";
 import { OperationsAfterSalesService } from "./operations-after-sales.service";
 import { OperationsAccessService } from "./operations-access.service";
@@ -106,4 +106,126 @@ test("a 1/200 refund installment cannot close the case or restock; the remaining
     assert.equal(orderUpdates.length, 0, "delivery fee has not been refunded, so the order must remain COMPLETED");
     assert.equal(record.refunds.reduce((sum, refund) => sum + refund.amountKsh, 0), 200);
   } finally { prisma.$transaction = original; }
+});
+
+test("a returned item needs between 1 and 5 photos", () => {
+  assert.throws(() => assertReturnPhotoCount(0), /at least 1 photo/);
+  assert.doesNotThrow(() => assertReturnPhotoCount(1));
+  assert.doesNotThrow(() => assertReturnPhotoCount(5));
+  assert.throws(() => assertReturnPhotoCount(6), /at most 5/);
+});
+
+test("only JPEG, PNG and WEBP photos up to 10 MB are accepted", () => {
+  assert.equal(returnPhotoContentType("image/jpeg", 1000), "image/jpeg");
+  assert.equal(returnPhotoContentType("IMAGE/PNG; charset=binary", 1000), "image/png");
+  assert.equal(returnPhotoContentType("image/webp", 10 * 1024 * 1024), "image/webp");
+  assert.throws(() => returnPhotoContentType("text/html", 1000), /JPEG, PNG or WEBP/);
+  assert.throws(() => returnPhotoContentType(undefined, 1000), /JPEG, PNG or WEBP/);
+  assert.throws(() => returnPhotoContentType("image/jpeg", 0), /between 1 byte and 10 MB/);
+  assert.throws(() => returnPhotoContentType("image/jpeg", 10 * 1024 * 1024 + 1), /between 1 byte and 10 MB/);
+});
+
+function receiveFixture(photoCount: number) {
+  const record = {
+    id: "return", orderId: "order", serviceCaseId: "case", orderItemId: "item", status: "APPROVED", receivedAt: null as Date | null,
+    restockable: null as boolean | null, refunds: [], events: [], photos: [], commissionAdjustment: null,
+    orderItem: { id: "item", productId: "product", lineTotalKsh: 200, snapshot: { barcode: "B1" } }
+  };
+  const order = { id: "order", status: "COMPLETED", totalKsh: 250, payments: [{ status: "SUCCESS", amountKsh: 250 }], afterSaleReturns: [record], commission: null };
+  const tx = {
+    $queryRaw: async () => [],
+    order: { findUnique: async () => order },
+    afterSaleEvent: { findUnique: async () => null, create: async () => ({}) },
+    afterSaleReturnPhoto: { count: async () => photoCount },
+    inventoryItem: { findUnique: async () => ({ barcode: "B1", updatedAt: new Date("2026-11-02T10:00:00Z") }) },
+    afterSaleReturn: {
+      update: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(record, data); return record; },
+      findUniqueOrThrow: async () => record, findMany: async () => [record]
+    },
+    auditLog: { create: async () => ({}) }
+  };
+  return { record, tx };
+}
+
+test("accepting a returned item is refused without a photo and succeeds with one", async () => {
+  const original = prisma.$transaction;
+  const access = { requirePermission: async () => ({ adminUser: { linkedEmployeeId: null } }) } as unknown as OperationsAccessService;
+  const input = { note: "Checked at the counter", receivedBarcode: "B1", restockable: true, idempotencyKey: "receive-1" };
+  try {
+    const without = receiveFixture(0);
+    prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(without.tx)) as typeof prisma.$transaction;
+    await assert.rejects(() => new OperationsAfterSalesService(access).execute("order", "return", "RECEIVE", input, "actor"), /at least 1 photo/);
+    assert.equal(without.record.status, "APPROVED", "a refused acceptance must not change the return");
+
+    const withPhoto = receiveFixture(2);
+    prisma.$transaction = (async (callback: (transaction: unknown) => unknown) => callback(withPhoto.tx)) as typeof prisma.$transaction;
+    const result = await new OperationsAfterSalesService(access).execute("order", "return", "RECEIVE", input, "actor");
+    assert.equal(result.returns[0]?.status, "RECEIVED");
+  } finally { prisma.$transaction = original; }
+});
+
+function photoStorage() {
+  const uploads: Array<{ objectName: string; contentType: string; size: number }> = [];
+  return {
+    uploads,
+    storage: {
+      bucket: "bucket",
+      returnPhotoObjectName: (returnId: string, photoId: string, type: string) => `returns/${returnId}/${photoId}.${type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg"}`,
+      upload: async (objectName: string, contentType: string, body: Buffer) => { uploads.push({ objectName, contentType, size: body.length }); },
+      download: async (objectName: string) => ({ body: new TextEncoder().encode(objectName).buffer, contentType: "image/jpeg" })
+    } as never
+  };
+}
+
+test("photos can only be added to an approved return, at most five, and are stored privately", async () => {
+  const db = prisma as unknown as Record<string, Record<string, unknown>>;
+  const saved = { afterSaleReturn: db.afterSaleReturn, afterSaleReturnPhoto: db.afterSaleReturnPhoto, auditLog: db.auditLog };
+  const access = { requirePermission: async () => ({ adminUser: { linkedEmployeeId: null } }) } as unknown as OperationsAccessService;
+  const { storage, uploads } = photoStorage();
+  const service = new OperationsAfterSalesService(access, storage);
+  let status = "APPROVED";
+  let count = 0;
+  const created: Array<{ data: { storageUrl: string; afterSaleReturnId: string; sizeBytes: number } }> = [];
+  db.afterSaleReturn = { findFirst: async ({ where }: { where: { id: string; orderId: string } }) => where.orderId === "order" ? { id: where.id, status } : null };
+  db.afterSaleReturnPhoto = { count: async () => count, create: async (args: { data: { storageUrl: string; afterSaleReturnId: string; sizeBytes: number } }) => { created.push(args); return { id: "p" }; } };
+  db.auditLog = { create: async () => ({}) };
+  try {
+    const bytes = Buffer.from("fake-image");
+    await assert.rejects(() => service.uploadPhoto("other-order", "return", "actor", "image/jpeg", bytes), /Return was not found/);
+    await assert.rejects(() => service.uploadPhoto("order", "return", "actor", "text/plain", bytes), /JPEG, PNG or WEBP/);
+    status = "REQUESTED";
+    await assert.rejects(() => service.uploadPhoto("order", "return", "actor", "image/jpeg", bytes), /approved/);
+    status = "RECEIVED";
+    await assert.rejects(() => service.uploadPhoto("order", "return", "actor", "image/jpeg", bytes), /approved/);
+    status = "APPROVED";
+    count = 5;
+    await assert.rejects(() => service.uploadPhoto("order", "return", "actor", "image/jpeg", bytes), /at most 5/);
+    assert.equal(uploads.length, 0, "no file may be written when a photo is refused");
+    count = 4;
+    await service.uploadPhoto("order", "return", "actor", "image/jpeg", bytes);
+    assert.equal(uploads.length, 1);
+    assert.match(uploads[0]!.objectName, /^returns\/return\/[0-9a-f-]+\.jpg$/);
+    assert.match(created[0]!.data.storageUrl, /^gs:\/\/bucket\/returns\/return\//);
+    assert.equal(created[0]!.data.sizeBytes, bytes.length);
+  } finally { Object.assign(db, saved); }
+});
+
+test("photos are served only to order viewers and refund approvers, for the right return", async () => {
+  const db = prisma as unknown as Record<string, Record<string, unknown>>;
+  const saved = db.afterSaleReturnPhoto;
+  const { storage } = photoStorage();
+  let allowed: string[] = [];
+  const access = { hasPermission: async (_actor: string, code: string) => allowed.includes(code) } as unknown as OperationsAccessService;
+  const service = new OperationsAfterSalesService(access, storage);
+  db.afterSaleReturnPhoto = { findFirst: async ({ where }: { where: { id: string; afterSaleReturnId: string } }) => where.id === "photo" && where.afterSaleReturnId === "return" ? { storageUrl: "gs://bucket/returns/return/photo.jpg" } : null };
+  try {
+    await assert.rejects(() => service.photoContent("order", "return", "photo", "actor"), /permission/);
+    allowed = ["customer-service.refund-approve"];
+    const stored = await service.photoContent("order", "return", "photo", "actor");
+    assert.equal(stored.contentType, "image/jpeg");
+    allowed = ["orders.view"];
+    await assert.rejects(() => service.photoContent("order", "other-return", "photo", "actor"), /Photo was not found/);
+    db.afterSaleReturnPhoto = { findFirst: async () => ({ storageUrl: "gs://another-bucket/returns/x.jpg" }) };
+    await assert.rejects(() => service.photoContent("order", "return", "photo", "actor"), /Photo was not found/);
+  } finally { db.afterSaleReturnPhoto = saved; }
 });

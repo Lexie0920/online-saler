@@ -147,6 +147,12 @@ delivery damage). Refunds stay manual; do not add automated decisions or refunds
 Until 2026-09-26 returns were accepted only for those five reasons and within
 24 hours.
 
+2026-11-02 (owner request): when the warehouse accepts a returned item it must
+add 1 to 5 photos of it. Without a photo the item cannot be accepted. Photos are
+stored in the private product-image bucket (only their path is in the database)
+and are shown on the order's returns card to staff who can view orders. This
+changes no money rule: refunds stay manual and are still recorded afterwards.
+
 ## Refunds
 
 - The system never moves money. A refund is executed in M-Pesa first and then

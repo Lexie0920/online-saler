@@ -1988,6 +1988,7 @@ model AfterSaleReturn {
   refunds                 RefundRecord[]
   commissionAdjustment    CommissionAdjustment?
   events                  AfterSaleEvent[]
+  photos                  AfterSaleReturnPhoto[]
   updatedAt               DateTime              @updatedAt
 
   @@index([orderId, status])
@@ -2131,6 +2132,23 @@ model CommissionAdjustment {
   afterSaleReturn       AfterSaleReturn          @relation(fields: [afterSaleReturnId], references: [id], onDelete: Restrict)
 
   @@index([commissionId, kind])
+}
+
+/// Photos the warehouse takes of a returned item at the counter. They are the
+/// evidence the approver looks at before a refund is allowed. The file lives in
+/// the private product-image bucket; only its gs:// path is stored here, and the
+/// bytes are only ever served through the operations API.
+model AfterSaleReturnPhoto {
+  id                    String          @id @default(uuid())
+  afterSaleReturnId     String
+  storageUrl            String
+  contentType           String
+  sizeBytes             Int
+  uploadedByAdminUserId String
+  createdAt             DateTime        @default(now())
+  afterSaleReturn       AfterSaleReturn @relation(fields: [afterSaleReturnId], references: [id], onDelete: Restrict)
+
+  @@index([afterSaleReturnId, createdAt])
 }
 
 model AfterSaleEvent {

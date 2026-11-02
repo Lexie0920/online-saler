@@ -29,6 +29,11 @@ export class ProductImageStorageService {
     return `staging/products/${productId}/${imageId}.${this.extension(contentType)}`;
   }
 
+  /** Returned-item photos live beside, never inside, the product image folders. */
+  returnPhotoObjectName(returnId: string, photoId: string, contentType: string): string {
+    return `returns/${returnId}/${photoId}.${this.extension(contentType)}`;
+  }
+
   derivedObjectName(
     productId: string,
     assetId: string,

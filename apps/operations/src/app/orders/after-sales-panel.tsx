@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { operationsFormatLocale, t } from "@/i18n/runtime";
+import { compressPhoto, photoSlotsLeft, RETURN_PHOTO_MAX_COUNT } from "@/lib/return-photo";
 
 type AfterSalesOrder = {
   id: string;
@@ -30,6 +31,7 @@ type AfterSalesOrder = {
     inventoryItem?: { barcode: string } | null;
   }>;
 };
+type ReturnPhoto = { id: string; contentType: string; sizeBytes: number; createdAt: string };
 type ReturnRecord = {
   id: string;
   orderItemId: string;
@@ -43,6 +45,7 @@ type ReturnRecord = {
   receivedAt?: string | null;
   restockable?: boolean | null;
   restockedAt?: string | null;
+  photos?: ReturnPhoto[];
   refunds: Array<{ id: string; amountKsh: number; externalReference: string; refundedAt: string }>;
   events: Array<{ id: string; action: string; reason: string; createdAt: string }>;
   commissionAdjustment?: { kind: string; amountKsh?: number } | null;
@@ -171,6 +174,7 @@ export function AfterSalesPanel({ order, session, onOrderChanged }: {
                 {record.restockedAt ? <p>{t("已入库复审：")}{formatDate(record.restockedAt)}</p> : null}
                 {record.commissionAdjustment?.kind === "RECOVERY_REQUIRED" ? <p>{t("已付佣金待追回，请联系财务核对。")}</p> : null}
               </div>
+              {record.photos && record.photos.length > 0 ? <ReturnPhotoStrip orderId={order.id} returnId={record.id} photos={record.photos} token={accessToken} /> : null}
               <div className="flex flex-wrap gap-2">
                 {record.status === "REQUESTED" && canApprove ? <><Button size="sm" disabled={disabled} onClick={() => setAction({ kind: "approve", record })}>{t("批准退货")}</Button><Button size="sm" variant="outline" disabled={disabled} onClick={() => setAction({ kind: "reject", record })}>{t("拒绝申请")}</Button></> : null}
                 {record.status === "APPROVED" && canOperate ? <Button size="sm" disabled={disabled} onClick={() => setAction({ kind: "receive", record })}>{t("实物退回验收")}</Button> : null}
@@ -216,6 +220,9 @@ function AfterSaleDialog({ action, order, eligibleItems, token, onClose, onDone 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const submitting = useRef(false);
+  const [photos, setPhotos] = useState<ReturnPhoto[]>(action.record?.photos ?? []);
+  const [uploadingPhotos, setUploadingPhotos] = useState(0);
+  const [photoError, setPhotoError] = useState("");
 
   // The store the customer is told to bring the item back to. A store that
   // cannot be listed is not a reason to block the request: the return simply
@@ -232,6 +239,36 @@ function AfterSaleDialog({ action, order, eligibleItems, token, onClose, onDone 
       }
     })();
   }, [action.kind, token]);
+
+  async function addPhotos(files: FileList | null) {
+    if (!files || files.length === 0 || !action.record) return;
+    const recordId = action.record.id;
+    setPhotoError("");
+    const picked = Array.from(files).slice(0, photoSlotsLeft(photos.length));
+    if (picked.length < files.length) setPhotoError(t("一次验收最多 {count} 张照片。", { count: RETURN_PHOTO_MAX_COUNT }));
+    for (const file of picked) {
+      setUploadingPhotos((count) => count + 1);
+      try {
+        const blob = await compressPhoto(file);
+        const response = await operationsFetch(`/api-proxy/operations/orders/${encodeURIComponent(order.id)}/after-sales/${encodeURIComponent(recordId)}/photos`, {
+          method: "POST",
+          headers: { "Content-Type": blob.type || "image/jpeg", Authorization: `Bearer ${token}` },
+          body: blob
+        });
+        const result = await response.json().catch(() => ({})) as { photo?: ReturnPhoto; message?: unknown };
+        if (!response.ok || !result.photo) {
+          const message = Array.isArray(result.message) ? result.message.join("；") : result.message;
+          throw new Error(typeof message === "string" ? message : t("照片上传失败，请重试。"));
+        }
+        const uploaded = result.photo;
+        setPhotos((current) => [...current, uploaded]);
+      } catch (caught) {
+        setPhotoError(caught instanceof Error ? caught.message : t("照片上传失败，请重试。"));
+      } finally {
+        setUploadingPhotos((count) => count - 1);
+      }
+    }
+  }
 
   const retry = useRef<{ payload: string; key: string } | null>(null);
   const remaining = action.record ? action.record.orderItem.lineTotalKsh - action.record.refunds.reduce((sum, refund) => sum + refund.amountKsh, 0) : 0;
@@ -255,6 +292,7 @@ function AfterSaleDialog({ action, order, eligibleItems, token, onClose, onDone 
     if (action.kind === "approve" || action.kind === "reject") { suffix += "/decision"; body.approved = action.kind === "approve"; }
     if (action.kind === "receive") {
       if (!barcode.trim() || !restockable) { setError(t("请扫码并选择实物验收结果。")); return; }
+      if (photos.length < 1) { setError(t("请至少上传 1 张退回商品照片。")); return; }
       suffix += "/receive";
       Object.assign(body, { receivedBarcode: barcode.trim(), restockable: restockable === "yes" });
     }
@@ -306,6 +344,14 @@ function AfterSaleDialog({ action, order, eligibleItems, token, onClose, onDone 
             {action.kind === "receive" ? <>
               <Field><FieldLabel htmlFor="after-sale-barcode">{t("扫描实际退回商品条码")}</FieldLabel><Input id="after-sale-barcode" required autoComplete="off" value={barcode} onChange={(event) => setBarcode(event.target.value)} disabled={busy} /></Field>
               <Choice id="after-sale-inspection" label={t("实物验收结果")} value={restockable} onChange={setRestockable} options={[["yes", t("实物一致，可进入入库复审")], ["no", t("不可重新售卖，保留处理记录")]]} disabled={busy} />
+              <Field>
+                <FieldLabel htmlFor="after-sale-photos">{t("退回商品照片（必填）")}</FieldLabel>
+                <p className="text-muted-foreground text-sm">{t("在柜台拍下实物的正面、背面和任何污渍或磨损。至少 1 张，最多 {count} 张；没有照片不能验收。", { count: RETURN_PHOTO_MAX_COUNT })}</p>
+                {action.record && photos.length > 0 ? <ReturnPhotoStrip orderId={order.id} returnId={action.record.id} photos={photos} token={token} /> : null}
+                {photoSlotsLeft(photos.length) > 0 ? <Input id="after-sale-photos" type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={busy || uploadingPhotos > 0} onChange={(event) => { const input = event.currentTarget; void addPhotos(input.files).finally(() => { input.value = ""; }); }} /> : null}
+                <p className="text-sm" role="status">{uploadingPhotos > 0 ? t("上传中…") : t("已上传 {count} 张", { count: photos.length })}</p>
+                {photoError ? <p className="text-destructive text-sm" role="alert">{photoError}</p> : null}
+              </Field>
             </> : null}
             {action.kind === "refund" ? <>
               <p className="text-sm">{t("商品剩余可登记金额：")}{money(remaining)}{t("。运费不自动计入退款。")}</p>
@@ -319,11 +365,46 @@ function AfterSaleDialog({ action, order, eligibleItems, token, onClose, onDone 
             <Field><FieldLabel htmlFor="after-sale-note">{action.kind === "reject" ? t("拒绝原因") : t("操作说明")}</FieldLabel><Textarea id="after-sale-note" required value={note} onChange={(event) => setNote(event.target.value)} disabled={busy} /></Field>
           </FieldGroup>
           {error ? <Alert variant="destructive"><AlertTriangleIcon /><AlertTitle>{t("未能保存")}</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
-          <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{t("取消")}</Button><Button type="submit" disabled={busy || (action.kind === "refund" && !verified)}>{busy ? t("正在保存…") : t(ACTION_LABELS[action.kind])}</Button></DialogFooter>
+          <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{t("取消")}</Button><Button type="submit" disabled={busy || (action.kind === "refund" && !verified) || (action.kind === "receive" && (photos.length < 1 || uploadingPhotos > 0))}>{busy ? t("正在保存…") : t(ACTION_LABELS[action.kind])}</Button></DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
   );
+}
+
+/** The photos are private, so each one is fetched with the employee's session and shown from memory. */
+function ReturnPhotoStrip({ orderId, returnId, photos, token }: { orderId: string; returnId: string; photos: ReturnPhoto[]; token: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="font-medium text-sm">{t("退回商品照片（{count}）", { count: photos.length })}</p>
+      <div className="flex flex-wrap gap-2">
+        {photos.map((photo, index) => <ReturnPhotoThumb key={photo.id} orderId={orderId} returnId={returnId} photoId={photo.id} token={token} label={t("退回商品照片 {number}", { number: index + 1 })} />)}
+      </div>
+    </div>
+  );
+}
+
+function ReturnPhotoThumb({ orderId, returnId, photoId, token, label }: { orderId: string; returnId: string; photoId: string; token: string; label: string }) {
+  const [url, setUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let objectUrl = "";
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await operationsFetch(`/api-proxy/operations/orders/${encodeURIComponent(orderId)}/after-sales/${encodeURIComponent(returnId)}/photos/${encodeURIComponent(photoId)}/content`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) throw new Error("photo");
+        objectUrl = URL.createObjectURL(await response.blob());
+        if (cancelled) URL.revokeObjectURL(objectUrl); else setUrl(objectUrl);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [orderId, returnId, photoId, token]);
+  if (failed) return <div className="flex size-24 items-center justify-center rounded-md border text-center text-muted-foreground text-xs">{t("照片读取失败")}</div>;
+  if (!url) return <div className="size-24 animate-pulse rounded-md border bg-muted" aria-label={label} />;
+  return <a href={url} target="_blank" rel="noreferrer" aria-label={label}><img src={url} alt={label} className="size-24 rounded-md border object-cover" /></a>;
 }
 
 function Choice({ id, label, value, onChange, options, disabled }: {

@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { createHash, randomUUID } from "node:crypto";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { ActorType, AfterSaleReturnReason, AfterSaleReturnStatus, CommissionAdjustmentKind, CommissionStatus, CustomerServiceCaseStatus, CustomerServiceCaseType, CustomerServiceIssueType, FulfillmentNodeStatus, InventoryItemStatus, InventoryMovementType, OrderStatus, PaymentStatus, Prisma, ProductStatus, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
 import { OperationsAccessService } from "./operations-access.service";
-import { assertRefundAmount, assertReturnWindow, commissionShares, requiredText, RETURN_REASONS } from "./operations-after-sales.rules";
+import { assertRefundAmount, assertReturnPhotoCount, assertReturnWindow, commissionShares, requiredText, RETURN_PHOTO_MAX, RETURN_REASONS, returnPhotoContentType } from "./operations-after-sales.rules";
+import { ProductImageStorageService } from "../product/product-image-storage.service";
 import { refreshWarehouseLocationStatuses, WAREHOUSE_OCCUPYING_STATUSES } from "./warehouse-capacity";
 import { scopedNodeId, storeScopeFor } from "./store-scope";
 
@@ -14,14 +15,16 @@ export type AfterSalesInput = {
   returnNodeId?: string;
 };
 type Action = "REQUEST" | "DECISION" | "RECEIVE" | "REFUND" | "RESTOCK";
-const RETURN_INCLUDE = { orderItem: { include: { snapshot: true } }, refunds: { orderBy: { recordedAt: "asc" as const } }, commissionAdjustment: true, events: { orderBy: { createdAt: "asc" as const } } } as const;
+/** Photo metadata only: the storage path never leaves the server. */
+const PHOTO_SELECT = { id: true, contentType: true, sizeBytes: true, uploadedByAdminUserId: true, createdAt: true } as const;
+const RETURN_INCLUDE = { orderItem: { include: { snapshot: true } }, photos: { select: PHOTO_SELECT, orderBy: { createdAt: "asc" as const } }, refunds: { orderBy: { recordedAt: "asc" as const } }, commissionAdjustment: true, events: { orderBy: { createdAt: "asc" as const } } } as const;
 const ORDER_INCLUDE = { items: { include: { snapshot: true } }, payments: true, fulfillment: true, commission: { include: { adjustments: true } }, afterSaleReturns: { include: RETURN_INCLUDE } } as const;
 type Order = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
 type Return = Order["afterSaleReturns"][number];
 
 @Injectable()
 export class OperationsAfterSalesService {
-  constructor(private readonly access: OperationsAccessService) {}
+  constructor(private readonly access: OperationsAccessService, private readonly storage?: ProductImageStorageService) {}
 
   async list(orderId: string, adminUserId: string) {
     await this.access.requirePermission(adminUserId, "orders.view");
@@ -82,6 +85,7 @@ export class OperationsAfterSalesService {
           if (!input.approved) await this.closeCase(tx, record!.serviceCaseId, now);
         } else if (action === "RECEIVE") {
           if (record!.status !== AfterSaleReturnStatus.APPROVED || typeof input.restockable !== "boolean") throw new BadRequestException("Only an approved return can be received with an explicit inspection result.");
+          assertReturnPhotoCount(await tx.afterSaleReturnPhoto.count({ where: { afterSaleReturnId: record!.id } }));
           const barcode = requiredText(input.receivedBarcode, "Received barcode", 160);
           const inventory = await tx.inventoryItem.findUnique({ where: { productId: record!.orderItem.productId } });
           if (input.restockable && (!inventory || barcode !== inventory.barcode || barcode !== record!.orderItem.snapshot?.barcode)) throw new BadRequestException("A mismatched returned barcode cannot be restocked. Record it as not restockable for review.");
@@ -100,6 +104,42 @@ export class OperationsAfterSalesService {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new ConflictException("This item request or external refund reference has already been recorded.");
       throw error;
     }
+  }
+
+  /**
+   * Stores one photo of the returned item. Photos are added while the return is
+   * approved and waiting at the counter; accepting the item then requires at
+   * least one of them. Nothing here changes the return's status.
+   */
+  async uploadPhoto(orderId: string, returnId: string, adminUserId: string, contentTypeHeader: string | undefined, body: Buffer) {
+    const session = await this.access.requirePermission(adminUserId, "orders.after-sale");
+    const contentType = returnPhotoContentType(contentTypeHeader, body.length);
+    if (!this.storage) throw new InternalServerErrorException("Photo storage is not available.");
+    const record = await prisma.afterSaleReturn.findFirst({ where: { id: returnId, orderId }, select: { id: true, status: true } });
+    if (!record) throw new NotFoundException("Return was not found for this order.");
+    if (record.status !== AfterSaleReturnStatus.APPROVED) throw new BadRequestException("Photos can only be added while the return is approved and waiting to be accepted.");
+    if (await prisma.afterSaleReturnPhoto.count({ where: { afterSaleReturnId: record.id } }) >= RETURN_PHOTO_MAX) throw new BadRequestException(`A return can have at most ${RETURN_PHOTO_MAX} photos.`);
+    const id = randomUUID();
+    const objectName = this.storage.returnPhotoObjectName(record.id, id, contentType);
+    await this.storage.upload(objectName, contentType, body);
+    const photo = await prisma.afterSaleReturnPhoto.create({
+      data: { id, afterSaleReturnId: record.id, storageUrl: `gs://${this.storage.bucket}/${objectName}`, contentType, sizeBytes: body.length, uploadedByAdminUserId: adminUserId },
+      select: PHOTO_SELECT
+    });
+    await prisma.auditLog.create({ data: { actorType: ActorType.EMPLOYEE, actorId: session.adminUser?.linkedEmployeeId ?? null, actorAdminUserId: adminUserId, sourceApp: SourceApp.OPERATIONS, module: "after-sales", entityType: "AfterSaleReturn", entityId: record.id, action: "PHOTO_ADDED", beforeJson: {}, afterJson: json({ photoId: photo.id, contentType, sizeBytes: body.length }), reason: "Photo of returned item added." } });
+    return { photo };
+  }
+
+  /** The people who handle returns and the people who approve refunds may look at the photos. */
+  async photoContent(orderId: string, returnId: string, photoId: string, adminUserId: string) {
+    if (!await this.access.hasPermission(adminUserId, "orders.view") && !await this.access.hasPermission(adminUserId, "customer-service.refund-approve")) {
+      throw new ForbiddenException("This admin account does not have permission for this operation.");
+    }
+    if (!this.storage) throw new InternalServerErrorException("Photo storage is not available.");
+    const photo = await prisma.afterSaleReturnPhoto.findFirst({ where: { id: photoId, afterSaleReturnId: returnId, afterSaleReturn: { orderId } }, select: { storageUrl: true } });
+    const prefix = `gs://${this.storage.bucket}/`;
+    if (!photo || !photo.storageUrl.startsWith(prefix)) throw new NotFoundException("Photo was not found.");
+    return this.storage.download(photo.storageUrl.slice(prefix.length));
   }
 
   private async request(tx: Prisma.TransactionClient, order: Order, input: AfterSalesInput, adminUserId: string, note: string, now: Date) {

@@ -32,3 +32,22 @@ export function commissionShares(items: readonly { id: string; lineTotalKsh: num
   for (const row of rows) if (remaining > 0) { row.amount += 1; remaining -= 1; }
   return new Map(rows.map((row) => [row.id, row.amount]));
 }
+
+/** A returned item must be photographed at the counter before it is accepted. */
+export const RETURN_PHOTO_MIN = 1;
+export const RETURN_PHOTO_MAX = 5;
+export const RETURN_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+export const RETURN_PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+
+export function assertReturnPhotoCount(count: number) {
+  if (!Number.isInteger(count) || count < RETURN_PHOTO_MIN) throw new BadRequestException(`Add at least ${RETURN_PHOTO_MIN} photo of the returned item before accepting it.`);
+  if (count > RETURN_PHOTO_MAX) throw new BadRequestException(`A return can have at most ${RETURN_PHOTO_MAX} photos.`);
+}
+
+/** Returns the bare media type (no parameters) or rejects anything that is not a supported photo. */
+export function returnPhotoContentType(header: string | undefined, size: number): (typeof RETURN_PHOTO_TYPES)[number] {
+  const type = header?.split(";", 1)[0]?.trim().toLowerCase();
+  if (!type || !(RETURN_PHOTO_TYPES as readonly string[]).includes(type)) throw new BadRequestException("Photos must be JPEG, PNG or WEBP images.");
+  if (!Number.isInteger(size) || size <= 0 || size > RETURN_PHOTO_MAX_BYTES) throw new BadRequestException("A photo must be between 1 byte and 10 MB.");
+  return type as (typeof RETURN_PHOTO_TYPES)[number];
+}

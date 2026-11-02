@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Post } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, Param, Post, Req, Res } from "@nestjs/common";
 import { OperationsAccessService } from "./operations-access.service";
 import { OperationsAfterSalesService, type AfterSalesInput } from "./operations-after-sales.service";
 
@@ -37,6 +37,21 @@ export class OperationsAfterSalesController {
     return this.service.execute(orderId, returnId, "RECEIVE", body, await this.access.requireAccessToken(authorization));
   }
 
+  /** Raw image bytes, the way the manual cutout upload works; the image type comes from Content-Type. */
+  @Post(":returnId/photos")
+  async uploadPhoto(@Headers("authorization") authorization: string | undefined, @Headers("content-type") contentType: string | undefined, @Param("orderId") orderId: string, @Param("returnId") returnId: string, @Req() request: any) {
+    const adminUserId = await this.access.requireAccessToken(authorization);
+    return this.service.uploadPhoto(orderId, returnId, adminUserId, contentType, await readPhotoBody(request));
+  }
+
+  @Get(":returnId/photos/:photoId/content")
+  async photoContent(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Param("returnId") returnId: string, @Param("photoId") photoId: string, @Res() response: any) {
+    const stored = await this.service.photoContent(orderId, returnId, photoId, await this.access.requireAccessToken(authorization));
+    response.setHeader("Content-Type", stored.contentType);
+    response.setHeader("Cache-Control", "private, max-age=3600");
+    response.send(Buffer.from(stored.body));
+  }
+
   @Post(":returnId/refunds")
   async refund(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Param("returnId") returnId: string, @Body() body: AfterSalesInput) {
     return this.service.execute(orderId, returnId, "REFUND", body, await this.access.requireAccessToken(authorization));
@@ -46,4 +61,23 @@ export class OperationsAfterSalesController {
   async restock(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Param("returnId") returnId: string, @Body() body: AfterSalesInput) {
     return this.service.execute(orderId, returnId, "RESTOCK", body, await this.access.requireAccessToken(authorization));
   }
+}
+
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
+async function readPhotoBody(request: any): Promise<Buffer> {
+  if (Buffer.isBuffer(request.body)) {
+    if (!request.body.length || request.body.length > MAX_PHOTO_BYTES) throw new BadRequestException("A photo must be between 1 byte and 10 MB.");
+    return request.body;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_PHOTO_BYTES) throw new BadRequestException("A photo must be between 1 byte and 10 MB.");
+    chunks.push(buffer);
+  }
+  if (!size) throw new BadRequestException("A photo is required.");
+  return Buffer.concat(chunks);
 }
