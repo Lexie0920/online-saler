@@ -58,6 +58,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ORDER_STATUS_TABS, type OrderStatusTab } from "./order-center-routes";
 import { AfterSalesPanel } from "./after-sales-panel";
 import { ExchangePanel } from "./exchange-panel";
+import { DeliveredExchangePanel } from "./delivered-exchange-panel";
 import { ReturnsExportButton } from "./returns-export-button";
 import { RiderFeePicker, type RiderFeeKsh } from "./rider-fee";
 import { operationsRequester } from "@/lib/operations-request";
@@ -1135,6 +1136,7 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
           <OrderCard order={order} session={session} busy={busy} showTimeline onDialog={setDialog} onDirect={directAction} onLabel={(order) => setLabelOrders([order])} />
           <AfterSalesPanel key={order.id} order={order} session={session} onOrderChanged={load} />
           <ExchangePanel key={`exchange-${order.id}`} order={order} session={session} onOrderChanged={load} />
+          <DeliveredExchangePanel key={`delivered-exchange-${order.id}`} order={order} session={session} onOrderChanged={load} />
         </>
       ) : (
         <Empty className="min-h-64 border"><EmptyHeader><EmptyTitle>{busy ? t("正在读取") : t("订单不存在")}</EmptyTitle></EmptyHeader></Empty>

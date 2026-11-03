@@ -203,12 +203,35 @@ out, or in a payout batch, blocks the top-up). The top-up is stored on the
 exchange row, not as a payment row, so it does not touch the M-Pesa payment
 records; it is counted towards the amount a later refund may reach.
 
-Planned, not built: exchanges on delivered orders within 3 days (old garment
-returned with photos and reviewed before the new one is sent, then relisted
-directly), a "return to exchange" option worth KSh 80 off the top-up, ticked by
-staff with a reason, once per order, and a commission already paid out being
-corrected as a negative adjustment line in the next commission export. Commission
-is always calculated on what the customer actually paid.
+### Exchanges on delivered orders
+
+An order that is COMPLETED can be exchanged for 3 days after completion
+(`EXCHANGE_REQUEST_WINDOW_HOURS`, the same window as returns). The customer hands
+the old garment back at the counter and takes the new one.
+
+1. Request (`orders.after-sale`): the new garment is claimed for the order
+   (PAID) and the exchange waits as AWAITING_RETURN. Same price or dearer only;
+   a dearer garment needs the top-up amount and M-Pesa code as above.
+2. Receive: the old garment is photographed (1 to 5 photos, the same limit as
+   returns) and its barcode scanned; the scan must match. Status PENDING_REVIEW.
+3. Review: a different person with `orders.after-sale` and
+   `action.customer-service.approve`. Approve needs a shelf code: the old garment
+   goes straight back to AVAILABLE (relisted, not re-reviewed) and the new one
+   becomes DELIVERED. Reject leaves the new garment reserved for customer
+   service to sort out. Cancel releases the new garment; any top-up already
+   taken is reported as owed back and is refunded by hand.
+
+"Return to exchange" is ticked by staff who hold the approve permission, only on
+a delivered order, with a reason, once per order, and takes KSh 80 off the
+top-up (`EXCHANGE_RETURN_DISCOUNT_KSH`). The discount is not part of commission.
+An order that has a return cannot be exchanged, and one with an open exchange
+cannot be exchanged again.
+
+Commission is calculated on what the customer actually paid. A commission that
+is not yet paid out is recalculated on the new subtotal. One already paid out is
+left alone and the result says so; a negative adjustment line in the next
+commission export is planned, not built. Exchange lines are not yet in the
+returns export (the columns are reserved).
 
 ## Refunds
 
