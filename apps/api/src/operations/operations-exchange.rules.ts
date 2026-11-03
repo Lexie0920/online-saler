@@ -7,7 +7,8 @@
  * delivered and the "return to exchange" discount come in a later step and are
  * refused here with a message that says so.
  */
-import { BadRequestException, ConflictException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
+import { EXCHANGE_REQUEST_WINDOW_HOURS, EXCHANGE_RETURN_DISCOUNT_KSH } from "@online-saler/business-rules";
 
 export const EXCHANGE_REASON_MIN = 3;
 export const EXCHANGE_REASON_MAX = 500;
@@ -58,7 +59,7 @@ export function normalizeTopUpCode(value: unknown): string | null {
  * difference, and staff must type the M-Pesa code of the payment that covers it
  * and the amount, which has to match exactly so a typo cannot be recorded as paid.
  */
-export function exchangePricing(oldPriceKsh: number, newPriceKsh: number, topUp: TopUpInput): { topUpKsh: number; mpesaCode: string | null } {
+export function exchangePricing(oldPriceKsh: number, newPriceKsh: number, topUp: TopUpInput, discountKsh = 0): { topUpKsh: number; mpesaCode: string | null; discountKsh: number; linePriceKsh: number } {
   const code = normalizeTopUpCode(topUp.mpesaCode);
   if (newPriceKsh < oldPriceKsh) {
     throw new BadRequestException("Choose an item priced the same or higher. A cheaper item cannot be swapped in; use a return and refund instead.");
@@ -68,12 +69,20 @@ export function exchangePricing(oldPriceKsh: number, newPriceKsh: number, topUp:
     if (code || (topUp.amountKsh !== undefined && topUp.amountKsh !== null && topUp.amountKsh !== "")) {
       throw new BadRequestException("This swap needs no payment. Leave the top-up amount and M-Pesa code empty.");
     }
-    return { topUpKsh: 0, mpesaCode: null };
+    return { topUpKsh: 0, mpesaCode: null, discountKsh: 0, linePriceKsh: oldPriceKsh };
   }
-  if (!code) throw new BadRequestException(`That item costs KSh ${difference} more. Collect KSh ${difference} by M-Pesa from the customer, then enter the transaction code and the amount.`);
+  const applied = Math.min(Math.max(discountKsh, 0), difference);
+  const payable = difference - applied;
+  if (payable === 0) {
+    if (code || (topUp.amountKsh !== undefined && topUp.amountKsh !== null && topUp.amountKsh !== "")) {
+      throw new BadRequestException(`The KSh ${applied} discount covers the whole difference, so nothing is paid. Leave the top-up amount and M-Pesa code empty.`);
+    }
+    return { topUpKsh: 0, mpesaCode: null, discountKsh: applied, linePriceKsh: oldPriceKsh };
+  }
+  if (!code) throw new BadRequestException(`The customer pays KSh ${payable}${applied ? ` (KSh ${difference} less the KSh ${applied} discount)` : ""}. Collect it by M-Pesa, then enter the transaction code and the amount.`);
   if (!/^[A-Z0-9]{10}$/.test(code)) throw new BadRequestException("The M-Pesa code must be 10 letters and digits, for example QGH7XY1234.");
-  if (Number(topUp.amountKsh) !== difference) throw new BadRequestException(`The difference is KSh ${difference}. The top-up amount entered does not match.`);
-  return { topUpKsh: difference, mpesaCode: code };
+  if (Number(topUp.amountKsh) !== payable) throw new BadRequestException(`The customer pays KSh ${payable}. The top-up amount entered does not match.`);
+  return { topUpKsh: payable, mpesaCode: code, discountKsh: applied, linePriceKsh: oldPriceKsh + payable };
 }
 
 /**
@@ -110,4 +119,47 @@ export function assertCandidateAvailable(candidate: ExchangeCandidate): void {
     throw new ConflictException("That item is not for sale right now.");
   }
   if (!candidate.priceKsh || candidate.priceKsh <= 0) throw new ConflictException("That item has no price.");
+}
+
+export type DeliveredExchangeState = {
+  orderStatus: string;
+  /** When the order was completed (delivered or collected). */
+  completedAt: Date | null;
+  now: Date;
+  inventoryStatus: string | null;
+  hasReturn: boolean;
+  hasOpenExchange: boolean;
+};
+
+/** A completed order, within 3 days of completion, with the garment still out with the customer. */
+export function assertCanExchangeDelivered(state: DeliveredExchangeState): void {
+  if (state.orderStatus !== "COMPLETED") throw new ConflictException("Only a delivered or collected order can be exchanged this way.");
+  const completedAt = state.completedAt;
+  if (!completedAt || state.now.getTime() < completedAt.getTime() || state.now.getTime() - completedAt.getTime() > EXCHANGE_REQUEST_WINDOW_HOURS * 60 * 60 * 1000) {
+    throw new BadRequestException("Exchanges on a delivered order must be requested within 3 days after delivery or pickup.");
+  }
+  if (state.hasReturn) throw new ConflictException("This item already has a return. Finish or close it before exchanging.");
+  if (state.hasOpenExchange) throw new ConflictException("This item already has an exchange in progress.");
+  if (state.inventoryStatus !== "DELIVERED") throw new ConflictException(`The item on this order is ${state.inventoryStatus ?? "missing from stock"}, not with the customer, so it cannot be exchanged this way.`);
+}
+
+/**
+ * "Return to exchange": the customer meant to return the garment and staff offer an
+ * exchange instead. It takes KSh 80 off the price difference, needs a reason, and
+ * can be used once per order.
+ */
+export function returnToExchangeDiscount(input: { returnToExchange: boolean; discountReason?: unknown; alreadyUsedOnOrder: boolean }): { discountKsh: number; discountReason: string | null } {
+  if (!input.returnToExchange) return { discountKsh: 0, discountReason: null };
+  const reason = typeof input.discountReason === "string" ? input.discountReason.trim() : "";
+  if (reason.length < EXCHANGE_REASON_MIN) throw new BadRequestException("Say why this is a return to exchange.");
+  if (reason.length > EXCHANGE_REASON_MAX) throw new BadRequestException(`The reason must be ${EXCHANGE_REASON_MAX} characters or fewer.`);
+  if (input.alreadyUsedOnOrder) throw new ConflictException("The return-to-exchange discount has already been used on this order.");
+  return { discountKsh: EXCHANGE_RETURN_DISCOUNT_KSH, discountReason: reason };
+}
+
+/** The person who photographs the old garment cannot be the one who approves it. */
+export function assertDifferentPeople(receiverAdminUserId: string | null, reviewerAdminUserId: string): void {
+  if (receiverAdminUserId && receiverAdminUserId === reviewerAdminUserId) {
+    throw new ForbiddenException("The person who received the item cannot also approve the exchange.");
+  }
 }

@@ -17,6 +17,10 @@ export const AFFILIATE_ATTRIBUTION_DAYS = 7;
 export const COMMISSION_CONFIRMATION_HOURS = 72;
 /** Customers may bring an item back to a store within 3 days for any reason (owner, 2026-09-26). */
 export const RETURN_REQUEST_WINDOW_HOURS = 72;
+/** A delivered order can be exchanged within the same 3 days after it is completed (owner, 2026-11-03). */
+export const EXCHANGE_REQUEST_WINDOW_HOURS = 72;
+/** Off the price difference when staff mark an exchange as "return to exchange" (owner, 2026-11-03). Once per order. */
+export const EXCHANGE_RETURN_DISCOUNT_KSH = 80;
 export const SIGNIFICANT_MEASUREMENT_ERROR_CM = 3;
 
 export function createReservationExpiry(now = new Date()): Date {

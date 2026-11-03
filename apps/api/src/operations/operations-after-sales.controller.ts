@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, Headers, Param, Post, Query
 import { OperationsAccessService } from "./operations-access.service";
 import { OperationsAfterSalesService, type AfterSalesInput } from "./operations-after-sales.service";
 import { OperationsExchangeService, type ExchangeInput } from "./operations-exchange.service";
+import { OperationsDeliveredExchangeService, type CancelExchangeInput, type DeliveredExchangeInput, type ReceiveExchangeInput, type ReviewExchangeInput } from "./operations-exchange-delivered.service";
 
 /** What a store is still waiting to get back over the counter. */
 @Controller("operations/nodes/:nodeId/returns")
@@ -34,6 +35,52 @@ export class OperationsExchangeController {
   @Post()
   async exchange(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Body() body: ExchangeInput) {
     return this.service.exchange(orderId, body ?? {}, await this.access.requireAccessToken(authorization));
+  }
+}
+
+/** Exchanges on a delivered order: request, photograph the old item, review, cancel. */
+@Controller("operations/orders/:orderId/exchanges")
+export class OperationsDeliveredExchangeController {
+  constructor(private readonly service: OperationsDeliveredExchangeService, private readonly access: OperationsAccessService) {}
+
+  @Get()
+  async list(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string) {
+    return this.service.list(orderId, await this.access.requireAccessToken(authorization));
+  }
+
+  @Post()
+  async request(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Body() body: DeliveredExchangeInput) {
+    return this.service.request(orderId, body ?? {}, await this.access.requireAccessToken(authorization));
+  }
+
+  /** Raw image bytes; the image type comes from Content-Type. */
+  @Post(":exchangeId/photos")
+  async uploadPhoto(@Headers("authorization") authorization: string | undefined, @Headers("content-type") contentType: string | undefined, @Param("orderId") orderId: string, @Param("exchangeId") exchangeId: string, @Req() request: any) {
+    const adminUserId = await this.access.requireAccessToken(authorization);
+    return this.service.uploadPhoto(orderId, exchangeId, adminUserId, contentType, await readPhotoBody(request));
+  }
+
+  @Get(":exchangeId/photos/:photoId/content")
+  async photoContent(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Param("exchangeId") exchangeId: string, @Param("photoId") photoId: string, @Res() response: any) {
+    const stored = await this.service.photoContent(orderId, exchangeId, photoId, await this.access.requireAccessToken(authorization));
+    response.setHeader("Content-Type", stored.contentType);
+    response.setHeader("Cache-Control", "private, max-age=3600");
+    response.send(Buffer.from(stored.body));
+  }
+
+  @Post(":exchangeId/receive")
+  async receive(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Param("exchangeId") exchangeId: string, @Body() body: ReceiveExchangeInput) {
+    return this.service.receive(orderId, exchangeId, body ?? {}, await this.access.requireAccessToken(authorization));
+  }
+
+  @Post(":exchangeId/review")
+  async review(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Param("exchangeId") exchangeId: string, @Body() body: ReviewExchangeInput) {
+    return this.service.review(orderId, exchangeId, body ?? {}, await this.access.requireAccessToken(authorization));
+  }
+
+  @Post(":exchangeId/cancel")
+  async cancel(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Param("exchangeId") exchangeId: string, @Body() body: CancelExchangeInput) {
+    return this.service.cancel(orderId, exchangeId, body ?? {}, await this.access.requireAccessToken(authorization));
   }
 }
 

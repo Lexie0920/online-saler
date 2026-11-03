@@ -2060,6 +2060,18 @@ model RefundRecord {
   @@index([kind, recordedAt])
 }
 
+enum OrderExchangeStatus {
+  /// Done: the order line holds the new garment.
+  COMPLETED
+  /// A delivered order: the new garment is held, the old one is still with the customer.
+  AWAITING_RETURN
+  /// The old garment is back and photographed; a reviewer has not decided yet.
+  PENDING_REVIEW
+  /// The reviewer did not accept the old garment. The new garment stays held until customer service settles it.
+  REJECTED
+  CANCELLED
+}
+
 enum OrderExchangeKind {
   /// An ordinary swap, no discount.
   STANDARD
@@ -2087,11 +2099,39 @@ model OrderExchange {
   discountKsh            Int               @default(0)
   reason                 String
   performedByAdminUserId String
+  status                 OrderExchangeStatus @default(COMPLETED)
+  /// Why staff ticked "return to exchange"; set only when discountKsh may be above zero.
+  discountReason         String?
+  receivedByAdminUserId  String?
+  receivedAt             DateTime?
+  receivedBarcode        String?
+  inspectionNote         String?
+  reviewedByAdminUserId  String?
+  reviewedAt             DateTime?
+  reviewNote             String?
+  completedAt            DateTime?
   order                  Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  photos                 OrderExchangePhoto[]
   createdAt              DateTime          @default(now())
 
   @@index([orderId, createdAt])
   @@index([createdAt])
+  @@index([status, createdAt])
+}
+
+/// A photo of the old garment when it comes back for an exchange. The file is in
+/// the private product-image bucket; only its gs:// path is stored here.
+model OrderExchangePhoto {
+  id                    String        @id @default(uuid())
+  orderExchangeId       String
+  storageUrl            String
+  contentType           String
+  sizeBytes             Int
+  uploadedByAdminUserId String
+  orderExchange         OrderExchange @relation(fields: [orderExchangeId], references: [id], onDelete: Restrict)
+  createdAt             DateTime      @default(now())
+
+  @@index([orderExchangeId, createdAt])
 }
 
 model FulfillmentNode {

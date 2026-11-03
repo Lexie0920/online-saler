@@ -6,12 +6,33 @@ import { refreshWarehouseLocationStatuses } from "./warehouse-capacity";
 
 export type ExchangeInput = { orderItemId?: string; newBarcode?: string; reason?: string; topUpAmountKsh?: number; topUpMpesaCode?: string };
 
-const PRODUCT_INCLUDE = {
+export const PRODUCT_INCLUDE = {
   images: { orderBy: { sortOrder: "asc" as const }, take: 1 },
   measurements: true,
   defects: true,
   inventoryItem: true
 } as const;
+
+type ExchangeProduct = Prisma.ProductGetPayload<{ include: typeof PRODUCT_INCLUDE }>;
+
+/** What the order line shows the customer for a garment, the same fields checkout records. */
+export function snapshotData(product: ExchangeProduct, priceKsh: number) {
+  return {
+    productCode: product.productCode,
+    barcode: product.barcode,
+    title: product.title || "Second-hand item",
+    category: product.category,
+    subcategory: product.subcategory,
+    brand: product.brand,
+    color: product.color,
+    sizeLabel: product.finalSizeLabel || product.tagSize,
+    conditionGrade: product.conditionGrade,
+    imageUrl: product.images[0]?.publicUrl || product.images[0]?.originalUrl || null,
+    measurements: product.measurements.map((item) => ({ type: item.measurementType, valueCm: item.finalValueCm?.toString() || null })),
+    defects: product.defects.map((item) => ({ type: item.defectType, severity: item.severity, description: item.customerSafeDescription || item.description })),
+    unitPriceKsh: priceKsh
+  };
+}
 
 /**
  * Swaps one garment on a paid order for another.
