@@ -1,21 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertCandidateAvailable, assertCanExchange, assertCanExchangeDelivered, assertCommissionRecalculable, assertDifferentPeople, assertNoExchangeBlocksReturn, commissionForSubtotal, exchangePricing, exchangeReason, returnToExchangeDiscount, type DeliveredExchangeState, type ExchangeOrderState } from "./operations-exchange.rules";
+import { assertCandidateAvailable, assertCanExchange, assertCanExchangeDelivered, assertCommissionRecalculable, assertDifferentPeople, exchangeReopensPicking, oldItemLeftShelf, assertNoExchangeBlocksReturn, commissionForSubtotal, exchangePricing, exchangeReason, returnToExchangeDiscount, type DeliveredExchangeState, type ExchangeOrderState } from "./operations-exchange.rules";
 
-const OK: ExchangeOrderState = { orderStatus: "PAID", fulfillmentStatus: "PAID", fulfillmentItemStatus: "PENDING", inventoryStatus: "PAID", hasReturn: false };
+const OK: ExchangeOrderState = { orderStatus: "PAID", fulfillmentStatus: "PAID", holderType: "WAREHOUSE", inventoryStatus: "PAID", hasReturn: false };
 const CANDIDATE = { status: "PUBLISHED", priceKsh: 400, inventoryStatus: "AVAILABLE", alreadyOnOrder: false, sameAsCurrent: false };
 
-test("a paid order waiting to be picked can be exchanged, with or without a picking task yet", () => {
+test("a paid, undelivered order can be exchanged at any stage while the parcel is in the warehouse", () => {
   assertCanExchange(OK);
-  assertCanExchange({ ...OK, fulfillmentStatus: null, fulfillmentItemStatus: null });
+  assertCanExchange({ ...OK, fulfillmentStatus: null, holderType: null });
+  for (const [fulfillmentStatus, inventoryStatus] of [["PICKING", "PAID"], ["READY_TO_PACK", "PICKED"], ["PACKED", "PACKED"], ["READY_FOR_PICKUP", "PACKED"], ["READY_FOR_DISPATCH", "PACKED"]]) {
+    assertCanExchange({ ...OK, orderStatus: "FULFILLING", fulfillmentStatus, inventoryStatus });
+  }
 });
 
-test("anything past that point is refused with a reason", () => {
+test("picked and packed parcels re-open picking, and the old garment needs a shelf", () => {
+  assert.equal(exchangeReopensPicking("PAID"), false);
+  assert.equal(exchangeReopensPicking("PICKING"), false);
+  assert.equal(exchangeReopensPicking(null), false);
+  for (const status of ["READY_TO_PACK", "PACKED", "READY_FOR_PICKUP", "READY_FOR_DISPATCH"]) assert.equal(exchangeReopensPicking(status), true);
+  assert.equal(oldItemLeftShelf("PAID"), false);
+  assert.equal(oldItemLeftShelf("PICKED"), true);
+  assert.equal(oldItemLeftShelf("PACKED"), true);
+});
+
+test("a parcel that has left the warehouse, an unpaid or delivered order, or a held return is refused with a reason", () => {
   assert.throws(() => assertCanExchange({ ...OK, orderStatus: "DEPOSIT_PAID" }), /fully paid/);
   assert.throws(() => assertCanExchange({ ...OK, orderStatus: "COMPLETED" }), /fully paid/);
-  assert.throws(() => assertCanExchange({ ...OK, fulfillmentStatus: "PICKING" }), /Picking has already started/);
-  assert.throws(() => assertCanExchange({ ...OK, fulfillmentItemStatus: "VERIFIED" }), /already been scanned/);
-  assert.throws(() => assertCanExchange({ ...OK, inventoryStatus: "PICKED" }), /PICKED/);
+  assert.throws(() => assertCanExchange({ ...OK, fulfillmentStatus: "IN_TRANSIT_TO_NODE", holderType: "IN_TRANSIT" }), /left the warehouse/);
+  assert.throws(() => assertCanExchange({ ...OK, fulfillmentStatus: "OUT_FOR_DELIVERY", holderType: "RIDER" }), /left the warehouse/);
+  assert.throws(() => assertCanExchange({ ...OK, fulfillmentStatus: "READY_FOR_PICKUP", holderType: "NODE" }), /left the warehouse/);
+  assert.throws(() => assertCanExchange({ ...OK, inventoryStatus: "DELIVERED" }), /DELIVERED/);
   assert.throws(() => assertCanExchange({ ...OK, inventoryStatus: null }), /missing from stock/);
   assert.throws(() => assertCanExchange({ ...OK, hasReturn: true }), /already has a return/);
 });

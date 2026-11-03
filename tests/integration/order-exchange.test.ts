@@ -126,6 +126,43 @@ test("exchanges: top-up recorded as a payment, commission follows what was paid,
     assert.equal((await prisma.inventoryItem.findUniqueOrThrow({ where: { productId: oldProduct.id } })).status, "PAID");
   });
 
+  await t.test("a packed order can be exchanged: the old item goes back on its shelf and picking is re-opened for the new one", async () => {
+    const oldProduct = await product(400, "PACKED");
+    const newProduct = await product(400, "AVAILABLE");
+    const created = await order(oldProduct, 400);
+    await prisma.order.update({ where: { id: created.id }, data: { status: "FULFILLING" } });
+    await prisma.orderFulfillment.create({ data: {
+      orderId: created.id, status: "PACKED", packedAt: new Date(), packagingMethod: "BOX", packageCount: 1,
+      items: { create: { orderItemId: created.items[0].id, expectedBarcode: oldProduct.barcode, status: "VERIFIED", scannedBarcode: oldProduct.barcode } }
+    } });
+    await ordinary.exchange(created.id, { orderItemId: created.items[0].id, newBarcode: newProduct.barcode!, reason: "Customer asked at the counter", oldItemLocationCode: shelf.locationCode }, counter.id);
+
+    const fulfillment = await prisma.orderFulfillment.findUniqueOrThrow({ where: { orderId: created.id }, include: { items: true } });
+    assert.equal(fulfillment.status, "PICKING");
+    assert.equal(fulfillment.packedAt, null);
+    assert.equal(fulfillment.items[0].status, "PENDING");
+    assert.equal(fulfillment.items[0].expectedBarcode, newProduct.barcode);
+    assert.equal(fulfillment.items[0].scannedBarcode, null);
+    const oldInventory = await prisma.inventoryItem.findUniqueOrThrow({ where: { productId: oldProduct.id } });
+    assert.equal(oldInventory.status, "AVAILABLE");
+    assert.equal(oldInventory.locationId, shelf.id);
+    assert.equal((await prisma.inventoryItem.findUniqueOrThrow({ where: { productId: newProduct.id } })).status, "PAID");
+    assert.equal(await prisma.fulfillmentEvent.count({ where: { orderId: created.id, action: "EXCHANGE_REOPENED_PICKING" } }), 1);
+  });
+
+  await t.test("a parcel that has already left the warehouse cannot be exchanged", async () => {
+    const oldProduct = await product(400, "PACKED");
+    const newProduct = await product(400, "AVAILABLE");
+    const created = await order(oldProduct, 400);
+    await prisma.order.update({ where: { id: created.id }, data: { status: "FULFILLING" } });
+    await prisma.orderFulfillment.create({ data: { orderId: created.id, status: "IN_TRANSIT_TO_NODE", currentHolderType: "IN_TRANSIT" } });
+    await assert.rejects(
+      ordinary.exchange(created.id, { orderItemId: created.items[0].id, newBarcode: newProduct.barcode!, reason: "Too late for this one" }, counter.id),
+      /left the warehouse/
+    );
+    assert.equal((await prisma.inventoryItem.findUniqueOrThrow({ where: { productId: newProduct.id } })).status, "AVAILABLE");
+  });
+
   await t.test("a delivered order: the new item is held, the old one is photographed and a different person approves; a paid commission is left alone and an adjustment recorded", async () => {
     const oldProduct = await product(400, "DELIVERED");
     const newProduct = await product(550, "AVAILABLE");

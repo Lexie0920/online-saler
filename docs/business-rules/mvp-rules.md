@@ -180,17 +180,28 @@ already in the file and stay empty until exchanges exist.
 an order for another. Exchange is its own action; the returns and refunds buttons
 only handle returns.
 
-It is allowed only when the order is fully paid and picking has not started (no
-scan yet, the old garment still waiting as PAID), and the new garment is on sale.
-A cheaper garment is refused (use a return and refund). An order that is
-deposit-only, picking, packed or delivered is refused with the reason. The old
-garment goes straight back to AVAILABLE and stays listed (it never left the
-shelf, so it is not re-reviewed); the new garment becomes PAID for the order and
-disappears from the shop. Both stock changes, the order line's snapshot, the
-picking task's expected barcode and an `OrderExchange` history row are written in
-one transaction under the order lock; the new garment is claimed with a
-conditional update so two people cannot take it at once. It needs the
-`orders.after-sale` permission and a reason, and writes an audit entry.
+It is allowed on any order that is fully paid and not yet delivered, whatever stage
+picking and packing have reached, as long as the parcel is still in the warehouse
+(picking, ready to pack, packed, ready for pickup or dispatch at the warehouse).
+A parcel that has left (in transit to a store, at a store, out for delivery) is
+refused with the reason: bring it back to the warehouse first. A deposit-only
+order is refused. The new garment must be on sale and a cheaper garment is refused
+(use a return and refund). The new garment becomes PAID for the order and
+disappears from the shop.
+
+The old garment goes straight back to AVAILABLE and stays listed (it is not
+re-reviewed). If it was never taken off its shelf it just changes status. If it
+had been picked or packed it is put back on a shelf: its own shelf by default,
+or the shelf code staff enter (capacity is checked) and a stock-in movement is
+written. If picking had been finished for the order, the order goes back to
+PICKING: the exchanged line must be scanned again with the new barcode, the other
+garments stay scanned but return to "held for the order", the packing details
+are cleared, and the warehouse packs the parcel again. A fulfillment event records
+this. Both stock changes, the order line's snapshot, the picking task's expected
+barcode and an `OrderExchange` history row are written in one transaction under
+the order lock; the new garment is claimed with a conditional update so two
+people cannot take it at once. It needs the `orders.after-sale` permission and a
+reason, and writes an audit entry.
 
 Same price: nothing is paid and the order total, payments and commission do not
 change. Dearer garment: the customer pays the whole difference by M-Pesa (no

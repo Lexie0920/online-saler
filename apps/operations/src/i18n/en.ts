@@ -3303,4 +3303,7 @@ export const enDictionary: Record<string, string> = {
   "只看换货补差价（核对顾客付款）": "Exchange top-ups only (to check customer payments)",
   "所选日期范围内没有退货或换货记录。": "No returns or exchanges in the selected dates.",
   "每件退回或换货的衣服一行：原因、经手人、退款进度、补差价和 M-Pesa 交易码。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。": "One line per returned or exchanged garment: reason, who handled it, refund progress, top-up and M-Pesa code. Leave the dates empty for the last 30 days. The file holds customer names and phones; do not pass it on.",
+  "把订单里的一件衣服换成另一件同价或更贵的衣服。适用于已付款、还没送达的订单，包裹还在仓库里时，不论拣货、打包到哪一步都可以换。换更便宜的请走退货退款。": "Swap one garment on the order for another of the same price or dearer. Works for paid orders not yet delivered, at any picking or packing stage, while the parcel is still in the warehouse. For a cheaper item use a return and refund.",
+  "旧衣服放回的货架编号（已拣货或已打包时填写，不填则放回原货架）": "Shelf code for the old item (only needed if it was already picked or packed; blank puts it back on its own shelf)",
+  "已换货。拣货单已更新为新衣服；如果订单已拣货或打包，这一单会回到拣货环节，请仓库重新扫码并打包。": "Exchanged. The picking task now expects the new item. If the order had already been picked or packed, it goes back to picking: the warehouse must scan and pack it again.",
 };

@@ -34,11 +34,12 @@ export function ExchangePanel({ order, session, onOrderChanged }: { order: Excha
   const [reason, setReason] = useState("");
   const [topUpAmount, setTopUpAmount] = useState("");
   const [topUpCode, setTopUpCode] = useState("");
+  const [shelf, setShelf] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  if (!hasPermission(session, "orders.after-sale") || order.status !== "PAID") return null;
+  if (!hasPermission(session, "orders.after-sale") || order.status !== "PAID" && order.status !== "FULFILLING") return null;
 
   async function submit() {
     setBusy(true);
@@ -48,7 +49,7 @@ export function ExchangePanel({ order, session, onOrderChanged }: { order: Excha
       const response = await operationsFetch(`/api-proxy/operations/orders/${encodeURIComponent(order.id)}/exchange`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-        body: JSON.stringify({ orderItemId, newBarcode: newBarcode.trim(), reason: reason.trim(), topUpAmountKsh: topUpAmount.trim() ? Number(topUpAmount) : undefined, topUpMpesaCode: topUpCode.trim() || undefined })
+        body: JSON.stringify({ orderItemId, newBarcode: newBarcode.trim(), reason: reason.trim(), topUpAmountKsh: topUpAmount.trim() ? Number(topUpAmount) : undefined, topUpMpesaCode: topUpCode.trim() || undefined, oldItemLocationCode: shelf.trim() || undefined })
       });
       const text = await response.text();
       let result: { message?: unknown } = {};
@@ -57,11 +58,12 @@ export function ExchangePanel({ order, session, onOrderChanged }: { order: Excha
         const message = Array.isArray(result.message) ? result.message.join("；") : result.message;
         throw new Error(typeof message === "string" ? message : t("换货失败 ({status})", { status: response.status }));
       }
-      setSuccess(t("已换货。拣货单已更新为新衣服。"));
+      setSuccess(t("已换货。拣货单已更新为新衣服；如果订单已拣货或打包，这一单会回到拣货环节，请仓库重新扫码并打包。"));
       setNewBarcode("");
       setReason("");
       setTopUpAmount("");
       setTopUpCode("");
+      setShelf("");
       await onOrderChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("换货失败，请刷新后再试。"));
@@ -74,7 +76,7 @@ export function ExchangePanel({ order, session, onOrderChanged }: { order: Excha
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><ArrowLeftRightIcon className="size-4" />{t("换货")}</CardTitle>
-        <CardDescription>{t("把订单里的一件衣服换成另一件同价或更贵的衣服。只适用于已付款、还没开始拣货的订单。换更便宜的请走退货退款；已送达的订单暂不支持。")}</CardDescription>
+        <CardDescription>{t("把订单里的一件衣服换成另一件同价或更贵的衣服。适用于已付款、还没送达的订单，包裹还在仓库里时，不论拣货、打包到哪一步都可以换。换更便宜的请走退货退款。")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">
@@ -102,6 +104,10 @@ export function ExchangePanel({ order, session, onOrderChanged }: { order: Excha
             </label>
           </div>
         </div>
+        <label className="flex flex-col gap-1 text-sm">
+          {t("旧衣服放回的货架编号（已拣货或已打包时填写，不填则放回原货架）")}
+          <Input value={shelf} onChange={(event) => setShelf(event.target.value)} />
+        </label>
         <label className="flex flex-col gap-1 text-sm">
           {t("换货原因")}
           <Textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />

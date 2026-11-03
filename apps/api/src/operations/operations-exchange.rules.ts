@@ -2,10 +2,9 @@
  * Rules for swapping a garment on an order for another (owner request, 2026-11-03).
  *
  * Pure functions, so the rules can be read and tested without a database. This
- * covers a paid order that has not started picking, swapped for a garment of the
- * same price or a dearer one (the customer pays the difference). Orders already
- * delivered and the "return to exchange" discount come in a later step and are
- * refused here with a message that says so.
+ * covers a paid order that has not been delivered, swapped for a garment of the
+ * same price or a dearer one (the customer pays the difference). Delivered orders
+ * and the "return to exchange" discount are in operations-exchange-delivered.service.ts.
  */
 import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import { EXCHANGE_REQUEST_WINDOW_HOURS, EXCHANGE_RETURN_DISCOUNT_KSH } from "@online-saler/business-rules";
@@ -24,24 +23,42 @@ export type ExchangeOrderState = {
   orderStatus: string;
   /** Null when no picking task exists yet. */
   fulfillmentStatus: string | null;
-  /** Null when the order line has no picking task line. */
-  fulfillmentItemStatus: string | null;
+  /** Who holds the parcel; null when there is no picking task. */
+  holderType: string | null;
   inventoryStatus: string | null;
   hasReturn: boolean;
 };
 
-/** Whether the garment on this order line can still be swapped, and if not, why not. */
+/** Stages where the parcel is still in the warehouse, so the garment can be swapped. */
+const WAREHOUSE_STAGES = ["PAID", "PICKING", "READY_TO_PACK", "PACKED", "READY_FOR_PICKUP", "READY_FOR_DISPATCH"];
+/** From these stages the picked-and-checked parcel has to go back to picking. */
+const REWIND_STAGES = ["READY_TO_PACK", "PACKED", "READY_FOR_PICKUP", "READY_FOR_DISPATCH"];
+
+/** Picking for this order was already finished, so swapping one garment re-opens picking. */
+export function exchangeReopensPicking(fulfillmentStatus: string | null): boolean {
+  return fulfillmentStatus !== null && REWIND_STAGES.includes(fulfillmentStatus);
+}
+
+/** The old garment was taken off its shelf for picking or packing, so it needs a shelf to go back to. */
+export function oldItemLeftShelf(inventoryStatus: string | null): boolean {
+  return inventoryStatus === "PICKED" || inventoryStatus === "PACKED";
+}
+
+/**
+ * Whether the garment on this order line can still be swapped, and if not, why not.
+ * Any order that is paid in full and not yet delivered qualifies while the parcel is
+ * still in the warehouse, whatever stage picking and packing have reached.
+ */
 export function assertCanExchange(state: ExchangeOrderState): void {
-  if (state.orderStatus !== "PAID") {
-    throw new ConflictException("Only a fully paid order that has not started fulfilment can have an item exchanged. Orders already delivered are not supported yet.");
+  if (state.orderStatus !== "PAID" && state.orderStatus !== "FULFILLING") {
+    throw new ConflictException("Only a fully paid order that has not been delivered can have an item exchanged here. For a delivered order use the delivered-order exchange.");
   }
   if (state.hasReturn) throw new ConflictException("This item already has a return. Finish or close it before exchanging.");
-  if (state.fulfillmentStatus !== null && state.fulfillmentStatus !== "PAID") {
-    throw new ConflictException("Picking has already started on this order. Ask the warehouse to put the item back on its shelf first.");
+  if (state.fulfillmentStatus !== null && (!WAREHOUSE_STAGES.includes(state.fulfillmentStatus) || state.holderType !== "WAREHOUSE")) {
+    throw new ConflictException("The parcel has already left the warehouse (in transit, at a store or out for delivery). Bring it back to the warehouse first, then exchange.");
   }
-  if (state.fulfillmentItemStatus === "VERIFIED") throw new ConflictException("This item has already been scanned during picking.");
-  if (state.inventoryStatus !== "PAID") {
-    throw new ConflictException(`The item on this order is ${state.inventoryStatus ?? "missing from stock"}, not waiting to be picked, so it cannot be swapped.`);
+  if (state.inventoryStatus !== "PAID" && state.inventoryStatus !== "PICKED" && state.inventoryStatus !== "PACKED") {
+    throw new ConflictException(`The item on this order is ${state.inventoryStatus ?? "missing from stock"}, not held for this order, so it cannot be swapped.`);
   }
 }
 

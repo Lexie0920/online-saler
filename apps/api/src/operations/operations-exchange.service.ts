@@ -1,10 +1,12 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { ActorType, InventoryItemStatus, OrderExchangeKind, PaymentKind, PaymentStatus, Prisma, SourceApp, prisma } from "@online-saler/database";
+import { ActorType, FulfillmentItemStatus, FulfillmentStatus, InventoryItemStatus, InventoryMovementType, OrderExchangeKind, PaymentKind, PaymentStatus, Prisma, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
 import { OperationsAccessService } from "./operations-access.service";
-import { assertCandidateAvailable, assertCanExchange, assertCommissionRecalculable, commissionForSubtotal, exchangePricing, exchangeReason } from "./operations-exchange.rules";
-import { refreshWarehouseLocationStatuses } from "./warehouse-capacity";
+import { assertCandidateAvailable, assertCanExchange, assertCommissionRecalculable, commissionForSubtotal, exchangePricing, exchangeReason, exchangeReopensPicking, oldItemLeftShelf } from "./operations-exchange.rules";
+import { refreshWarehouseLocationStatuses, WAREHOUSE_OCCUPYING_STATUSES } from "./warehouse-capacity";
 
-export type ExchangeInput = { orderItemId?: string; newBarcode?: string; reason?: string; topUpAmountKsh?: number; topUpMpesaCode?: string };
+export type ExchangeInput = { orderItemId?: string; newBarcode?: string; reason?: string; topUpAmountKsh?: number; topUpMpesaCode?: string;
+  /** Where the old garment goes back when it had already been taken off its shelf for picking or packing. Defaults to its own shelf. */
+  oldItemLocationCode?: string };
 
 /**
  * Records the money a customer paid for an exchange as a settled Payment, so it
@@ -92,17 +94,17 @@ export class OperationsExchangeService {
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`);
       const order = await tx.order.findUnique({
         where: { id: orderId },
-        include: { items: { include: { fulfillmentItem: true, afterSaleReturn: { select: { id: true } } } }, fulfillment: { select: { status: true } }, commission: { select: { id: true, status: true, rateBps: true, payoutId: true } } }
+        include: { items: { include: { fulfillmentItem: true, afterSaleReturn: { select: { id: true } } } }, fulfillment: { select: { id: true, status: true, currentHolderType: true } }, commission: { select: { id: true, status: true, rateBps: true, payoutId: true } } }
       });
       if (!order) throw new NotFoundException("Order was not found.");
       const line = order.items.find((item) => item.id === orderItemId);
       if (!line) throw new NotFoundException("That item is not on this order.");
 
-      const oldInventory = await tx.inventoryItem.findUnique({ where: { productId: line.productId }, select: { id: true, status: true, locationId: true } });
+      const oldInventory = await tx.inventoryItem.findUnique({ where: { productId: line.productId }, select: { id: true, productId: true, status: true, locationId: true } });
       assertCanExchange({
         orderStatus: order.status,
         fulfillmentStatus: order.fulfillment?.status ?? null,
-        fulfillmentItemStatus: line.fulfillmentItem?.status ?? null,
+        holderType: order.fulfillment?.currentHolderType ?? null,
         inventoryStatus: oldInventory?.status ?? null,
         hasReturn: Boolean(line.afterSaleReturn)
       });
@@ -132,11 +134,39 @@ export class OperationsExchangeService {
         data: { status: InventoryItemStatus.PAID }
       });
       if (claimed.count !== 1) throw new ConflictException("Another customer has just taken that item.");
+      // The old garment goes back on sale. If it was still on its shelf (nothing picked yet) it simply
+      // changes status. If it had been taken off the shelf for picking or packing, it is put back on a shelf.
+      const leftShelf = oldItemLeftShelf(oldInventory!.status);
+      let destinationId = oldInventory!.locationId;
+      if (leftShelf) {
+        const code = input.oldItemLocationCode?.trim();
+        const destination = code
+          ? await tx.warehouseLocation.findUnique({ where: { locationCode: code } })
+          : oldInventory!.locationId ? await tx.warehouseLocation.findUnique({ where: { id: oldInventory!.locationId } }) : null;
+        if (!destination) throw new BadRequestException("The old item was already taken off its shelf. Enter the shelf code it is being put back on.");
+        if (!destination.active || destination.status === WarehouseLocationStatus.INACTIVE) throw new BadRequestException("The shelf for the old item is inactive. Enter another shelf code.");
+        const occupied = await tx.inventoryItem.count({ where: { locationId: destination.id, status: { in: WAREHOUSE_OCCUPYING_STATUSES } } });
+        if (occupied >= destination.capacity) throw new BadRequestException("The shelf for the old item is full. Enter another shelf code.");
+        destinationId = destination.id;
+      }
       const released = await tx.inventoryItem.updateMany({
-        where: { id: oldInventory!.id, status: InventoryItemStatus.PAID },
-        data: { status: InventoryItemStatus.AVAILABLE }
+        where: { id: oldInventory!.id, status: oldInventory!.status },
+        data: { status: InventoryItemStatus.AVAILABLE, ...(leftShelf ? { locationId: destinationId } : {}) }
       });
       if (released.count !== 1) throw new ConflictException("The item on this order changed while it was being exchanged. Reload and try again.");
+      if (leftShelf) {
+        await tx.inventoryMovement.create({
+          data: {
+            inventoryItemId: oldInventory!.id,
+            productId: oldInventory!.productId,
+            movementType: InventoryMovementType.STOCK_IN,
+            fromLocationId: oldInventory!.locationId,
+            toLocationId: destinationId,
+            employeeId: session.adminUser!.linkedEmployeeId ?? null,
+            reason: `Old item put back after exchange: ${reason}`
+          }
+        });
+      }
 
       await tx.orderItem.update({
         where: { id: line.id },
@@ -171,12 +201,58 @@ export class OperationsExchangeService {
         }
       });
       if (line.fulfillmentItem) {
+        // The new garment has to be scanned at picking, whatever had been verified before.
         await tx.fulfillmentItem.update({
           where: { id: line.fulfillmentItem.id },
-          data: { expectedBarcode: product.barcode?.trim() || null, scannedBarcode: null, verifiedByEmployeeId: null, verifiedAt: null }
+          data: { expectedBarcode: product.barcode?.trim() || null, status: FulfillmentItemStatus.PENDING, scannedBarcode: null, verifiedByEmployeeId: null, verifiedAt: null }
         });
       }
-      await refreshWarehouseLocationStatuses(tx, [oldInventory!.locationId ?? "", product.inventoryItem!.locationId ?? ""]);
+      const fulfillment = order.fulfillment;
+      let reopened = false;
+      if (fulfillment && exchangeReopensPicking(fulfillment.status)) {
+        reopened = true;
+        // Picking and packing were finished for the old set of garments. Re-open picking: the other
+        // garments stay scanned but go back to "held for the order" so the normal scan of the new one
+        // can finish picking, and the parcel is packed again.
+        await tx.inventoryItem.updateMany({
+          where: { productId: { in: order.items.filter((item) => item.id !== line.id).map((item) => item.productId) }, status: { in: [InventoryItemStatus.PICKED, InventoryItemStatus.PACKED] } },
+          data: { status: InventoryItemStatus.PAID }
+        });
+        await tx.orderFulfillment.update({
+          where: { id: fulfillment.id },
+          data: {
+            status: FulfillmentStatus.PICKING,
+            pickedAt: null,
+            packingStartedAt: null,
+            packingStartedByEmployeeId: null,
+            packedAt: null,
+            packedByEmployeeId: null,
+            packagingMethod: null,
+            packageCount: null,
+            packingStatus: null,
+            packingNote: null,
+            readyForPickupAt: null,
+            readyForDispatchAt: null
+          }
+        });
+      }
+      if (fulfillment) {
+        await tx.fulfillmentEvent.create({
+          data: {
+            fulfillmentId: fulfillment.id,
+            orderId: order.id,
+            actorAdminUserId: session.adminUser!.id,
+            actorEmployeeId: session.adminUser!.linkedEmployeeId ?? null,
+            orderItemId: line.id,
+            action: reopened ? "EXCHANGE_REOPENED_PICKING" : "ITEM_EXCHANGED",
+            oldStatus: fulfillment.status,
+            newStatus: reopened ? FulfillmentStatus.PICKING : fulfillment.status,
+            note: reason,
+            expectedBarcode: product.barcode?.trim() || null
+          }
+        });
+      }
+      await refreshWarehouseLocationStatuses(tx, [oldInventory!.locationId ?? "", destinationId ?? "", product.inventoryItem!.locationId ?? ""]);
 
       const exchange = await tx.orderExchange.create({
         data: {
