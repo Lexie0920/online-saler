@@ -618,8 +618,11 @@ export const enDictionary: Record<string, string> = {
   "换货失败 ({status})": "Exchange failed ({status})",
   "换货失败，请刷新后再试。": "Could not exchange the item. Reload and try again.",
   "已换货。拣货单已更新为新衣服。": "Item exchanged. The picking task now expects the new garment.",
-  "把订单里的一件衣服换成另一件同价的衣服。只适用于已付款、还没开始拣货的订单。换更贵、更便宜或已送达的订单暂不支持。":
-    "Swap one garment on the order for another at the same price. Only for paid orders that have not started picking. Dearer or cheaper items and delivered orders are not supported yet.",
+  "把订单里的一件衣服换成另一件同价或更贵的衣服。只适用于已付款、还没开始拣货的订单。换更便宜的请走退货退款；已送达的订单暂不支持。":
+    "Swap one garment on the order for another at the same price or dearer. Only for paid orders that have not started picking. For a cheaper item use a return and refund; delivered orders are not supported yet.",
+  "新衣服更贵时，先向顾客收取差价（M-Pesa），再填写下面两项。同价换货留空。": "If the new item costs more, collect the difference from the customer by M-Pesa first, then fill in the two boxes below. Leave them empty for a same-price swap.",
+  "补差价金额（KSh）": "Top-up amount (KSh)",
+  "补差价的 M-Pesa 交易码": "M-Pesa transaction code of the top-up",
   "要换掉的衣服": "Item to swap out",
   "新衣服的条码": "Barcode of the new item",
   "扫码或输入新衣服的条码": "Scan or type the new item's barcode",

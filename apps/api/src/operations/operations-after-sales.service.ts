@@ -256,7 +256,9 @@ export class OperationsAfterSalesService {
     if (!Number.isFinite(refundedAt.getTime()) || refundedAt > now || refundedAt < record.receivedAt!) throw new BadRequestException("Actual refund time must be after item receipt and cannot be in the future.");
     const itemRefunded = record.refunds.reduce((sum, row) => sum + row.amountKsh, 0);
     const totalRefunded = order.afterSaleReturns.flatMap((row) => row.refunds).reduce((sum, row) => sum + row.amountKsh, 0);
-    const paymentAmount = order.payments.filter((row) => row.status === PaymentStatus.SUCCESS).reduce((sum, row) => sum + row.amountKsh, 0);
+    // A top-up paid for an exchange is real money the customer handed over, so it counts towards what can be refunded.
+    const topUps = await tx.orderExchange.aggregate({ where: { orderId: order.id }, _sum: { topUpKsh: true } });
+    const paymentAmount = order.payments.filter((row) => row.status === PaymentStatus.SUCCESS).reduce((sum, row) => sum + row.amountKsh, 0) + (topUps._sum.topUpKsh ?? 0);
     assertRefundAmount(input.amountKsh, record.orderItem.lineTotalKsh, itemRefunded, order.totalKsh, totalRefunded, paymentAmount);
     // The refund must have been approved first. The order is already locked, so
     // lock the requests too: nobody can withdraw one while it is being used.

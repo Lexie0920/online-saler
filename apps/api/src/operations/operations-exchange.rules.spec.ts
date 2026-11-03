@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertCandidateAvailable, assertCanExchange, assertSamePrice, exchangeReason, type ExchangeOrderState } from "./operations-exchange.rules";
+import { assertCandidateAvailable, assertCanExchange, assertCommissionRecalculable, commissionForSubtotal, exchangePricing, exchangeReason, type ExchangeOrderState } from "./operations-exchange.rules";
 
 const OK: ExchangeOrderState = { orderStatus: "PAID", fulfillmentStatus: "PAID", fulfillmentItemStatus: "PENDING", inventoryStatus: "PAID", hasReturn: false };
 const CANDIDATE = { status: "PUBLISHED", priceKsh: 400, inventoryStatus: "AVAILABLE", alreadyOnOrder: false, sameAsCurrent: false };
@@ -20,10 +20,33 @@ test("anything past that point is refused with a reason", () => {
   assert.throws(() => assertCanExchange({ ...OK, hasReturn: true }), /already has a return/);
 });
 
-test("step 1 only allows the same price: cheaper and dearer both say what to do instead", () => {
-  assertSamePrice(400, 400);
-  assert.throws(() => assertSamePrice(400, 300), /return and refund/);
-  assert.throws(() => assertSamePrice(400, 520), /KSh 120 more/);
+test("a cheaper item is refused and tells staff to use a return and refund", () => {
+  assert.throws(() => exchangePricing(400, 300, {}), /return and refund/);
+});
+
+test("the same price needs no payment, and a stray amount or code is refused", () => {
+  assert.deepEqual(exchangePricing(400, 400, {}), { topUpKsh: 0, mpesaCode: null });
+  assert.throws(() => exchangePricing(400, 400, { mpesaCode: "QGH7XY1234" }), /needs no payment/);
+  assert.throws(() => exchangePricing(400, 400, { amountKsh: 0 }), /needs no payment/);
+});
+
+test("a dearer item needs the whole difference, the M-Pesa code, and a matching amount", () => {
+  assert.deepEqual(exchangePricing(400, 520, { amountKsh: 120, mpesaCode: " qgh7xy1234 " }), { topUpKsh: 120, mpesaCode: "QGH7XY1234" });
+  assert.throws(() => exchangePricing(400, 520, {}), /Collect KSh 120/);
+  assert.throws(() => exchangePricing(400, 520, { amountKsh: 120, mpesaCode: "short" }), /10 letters and digits/);
+  assert.throws(() => exchangePricing(400, 520, { amountKsh: 100, mpesaCode: "QGH7XY1234" }), /does not match/);
+  assert.throws(() => exchangePricing(400, 520, { mpesaCode: "QGH7XY1234" }), /does not match/);
+});
+
+test("a top-up recalculates an unpaid commission and is blocked by a paid one", () => {
+  assert.equal(assertCommissionRecalculable(null), false);
+  assert.equal(assertCommissionRecalculable({ status: "REJECTED", payoutId: null }), false);
+  assert.equal(assertCommissionRecalculable({ status: "PENDING", payoutId: null }), true);
+  assert.equal(assertCommissionRecalculable({ status: "CONFIRMED", payoutId: null }), true);
+  assert.throws(() => assertCommissionRecalculable({ status: "PAID", payoutId: "p1" }), /already been paid out/);
+  assert.throws(() => assertCommissionRecalculable({ status: "CONFIRMED", payoutId: "p1" }), /already been paid out/);
+  assert.equal(commissionForSubtotal(520, 1000), 52);
+  assert.equal(commissionForSubtotal(525, 1000), 53);
 });
 
 test("the new item must be for sale, priced, and not already on the order", () => {

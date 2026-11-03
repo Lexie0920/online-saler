@@ -176,32 +176,39 @@ already in the file and stay empty until exchanges exist.
 
 ## Exchanges
 
-2026-11-03 (owner request, step 1 of 3): on the order page, a 换货 card swaps one
-garment on an order for another. Exchange is its own action; the returns and
-refunds buttons only handle returns.
+2026-11-03 (owner request): on the order page, a 换货 card swaps one garment on
+an order for another. Exchange is its own action; the returns and refunds buttons
+only handle returns.
 
-Step 1 allows it only when the order is fully paid and picking has not started
-(no scan yet, the old garment still waiting as PAID), and the new garment is on
-sale and costs exactly the same. A cheaper garment is refused (use a return and
-refund), a dearer one is refused until top-ups exist, and an order that is
+It is allowed only when the order is fully paid and picking has not started (no
+scan yet, the old garment still waiting as PAID), and the new garment is on sale.
+A cheaper garment is refused (use a return and refund). An order that is
 deposit-only, picking, packed or delivered is refused with the reason. The old
 garment goes straight back to AVAILABLE and stays listed (it never left the
 shelf, so it is not re-reviewed); the new garment becomes PAID for the order and
 disappears from the shop. Both stock changes, the order line's snapshot, the
 picking task's expected barcode and an `OrderExchange` history row are written in
 one transaction under the order lock; the new garment is claimed with a
-conditional update so two people cannot take it at once. Same price means the
-order total, payments and affiliate commission do not change. It needs the
+conditional update so two people cannot take it at once. It needs the
 `orders.after-sale` permission and a reason, and writes an audit entry.
 
-Planned, not built: a dearer garment with the customer paying the difference
-(M-Pesa), exchanges on delivered orders within 3 days (old garment returned with
-photos and reviewed before the new one is sent, then relisted directly), and a
-"return to exchange" option worth KSh 80 off the top-up, ticked by staff with a
-reason, once per order. Commission is always calculated on what the customer
-actually paid; a commission already paid out is corrected as a negative
-adjustment line in the next commission export. Refunds are capped at what was
-actually paid.
+Same price: nothing is paid and the order total, payments and commission do not
+change. Dearer garment: the customer pays the whole difference by M-Pesa (no
+discount on an ordinary exchange). Staff enter the transaction code and the
+amount, which must equal the difference; the code must be 10 letters and digits
+and unused by any other exchange or recorded payment. The order line price, the
+order item subtotal and total rise by the difference, and a commission that is
+not yet paid out is recalculated on the new subtotal (a commission already paid
+out, or in a payout batch, blocks the top-up). The top-up is stored on the
+exchange row, not as a payment row, so it does not touch the M-Pesa payment
+records; it is counted towards the amount a later refund may reach.
+
+Planned, not built: exchanges on delivered orders within 3 days (old garment
+returned with photos and reviewed before the new one is sent, then relisted
+directly), a "return to exchange" option worth KSh 80 off the top-up, ticked by
+staff with a reason, once per order, and a commission already paid out being
+corrected as a negative adjustment line in the next commission export. Commission
+is always calculated on what the customer actually paid.
 
 ## Refunds
 

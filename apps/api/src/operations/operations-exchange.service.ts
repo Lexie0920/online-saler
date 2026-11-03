@@ -1,10 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { ActorType, InventoryItemStatus, OrderExchangeKind, Prisma, SourceApp, prisma } from "@online-saler/database";
 import { OperationsAccessService } from "./operations-access.service";
-import { assertCandidateAvailable, assertCanExchange, assertSamePrice, exchangeReason } from "./operations-exchange.rules";
+import { assertCandidateAvailable, assertCanExchange, assertCommissionRecalculable, commissionForSubtotal, exchangePricing, exchangeReason } from "./operations-exchange.rules";
 import { refreshWarehouseLocationStatuses } from "./warehouse-capacity";
 
-export type ExchangeInput = { orderItemId?: string; newBarcode?: string; reason?: string };
+export type ExchangeInput = { orderItemId?: string; newBarcode?: string; reason?: string; topUpAmountKsh?: number; topUpMpesaCode?: string };
 
 const PRODUCT_INCLUDE = {
   images: { orderBy: { sortOrder: "asc" as const }, take: 1 },
@@ -43,7 +43,7 @@ export class OperationsExchangeService {
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`);
       const order = await tx.order.findUnique({
         where: { id: orderId },
-        include: { items: { include: { fulfillmentItem: true, afterSaleReturn: { select: { id: true } } } }, fulfillment: { select: { status: true } } }
+        include: { items: { include: { fulfillmentItem: true, afterSaleReturn: { select: { id: true } } } }, fulfillment: { select: { status: true } }, commission: { select: { id: true, status: true, rateBps: true, payoutId: true } } }
       });
       if (!order) throw new NotFoundException("Order was not found.");
       const line = order.items.find((item) => item.id === orderItemId);
@@ -67,7 +67,15 @@ export class OperationsExchangeService {
         alreadyOnOrder: order.items.some((item) => item.productId === product.id && item.id !== line.id),
         sameAsCurrent: product.id === line.productId
       });
-      assertSamePrice(line.unitPriceKsh, product.priceKsh!);
+      const pricing = exchangePricing(line.unitPriceKsh, product.priceKsh!, { amountKsh: input.topUpAmountKsh, mpesaCode: input.topUpMpesaCode });
+      let recalculateCommission = false;
+      if (pricing.topUpKsh > 0) {
+        recalculateCommission = assertCommissionRecalculable(order.commission);
+        // One M-Pesa payment can cover one top-up, and cannot be a payment the shop already recorded.
+        const usedOnExchange = await tx.orderExchange.findFirst({ where: { topUpMpesaCode: pricing.mpesaCode }, select: { id: true } });
+        const usedOnPayment = await tx.payment.findFirst({ where: { providerReceiptNumber: pricing.mpesaCode }, select: { id: true } });
+        if (usedOnExchange || usedOnPayment) throw new ConflictException("That M-Pesa code has already been used for another payment.");
+      }
 
       // Claim the new garment first: if somebody else just took it, nothing else has moved yet.
       const claimed = await tx.inventoryItem.updateMany({
@@ -81,7 +89,20 @@ export class OperationsExchangeService {
       });
       if (released.count !== 1) throw new ConflictException("The item on this order changed while it was being exchanged. Reload and try again.");
 
-      await tx.orderItem.update({ where: { id: line.id }, data: { productId: product.id } });
+      await tx.orderItem.update({
+        where: { id: line.id },
+        data: { productId: product.id, ...(pricing.topUpKsh > 0 ? { unitPriceKsh: product.priceKsh!, lineTotalKsh: product.priceKsh! } : {}) }
+      });
+      if (pricing.topUpKsh > 0) {
+        const newSubtotal = order.itemSubtotalKsh + pricing.topUpKsh;
+        await tx.order.update({ where: { id: order.id }, data: { itemSubtotalKsh: newSubtotal, totalKsh: order.totalKsh + pricing.topUpKsh } });
+        if (recalculateCommission && order.commission) {
+          await tx.commission.update({
+            where: { id: order.commission.id },
+            data: { orderSubtotalKsh: newSubtotal, commissionAmountKsh: commissionForSubtotal(newSubtotal, order.commission.rateBps) }
+          });
+        }
+      }
       await tx.orderSnapshot.update({
         where: { orderItemId: line.id },
         data: {
@@ -117,6 +138,8 @@ export class OperationsExchangeService {
           newProductId: product.id,
           oldPriceKsh: line.unitPriceKsh,
           newPriceKsh: product.priceKsh!,
+          topUpKsh: pricing.topUpKsh,
+          topUpMpesaCode: pricing.mpesaCode,
           reason,
           performedByAdminUserId: session.adminUser!.id
         }
@@ -132,7 +155,7 @@ export class OperationsExchangeService {
           entityId: exchange.id,
           action: "EXCHANGE_ITEM",
           beforeJson: { orderItemId: line.id, productId: line.productId, priceKsh: line.unitPriceKsh },
-          afterJson: { orderItemId: line.id, productId: product.id, priceKsh: product.priceKsh!, barcode: product.barcode ?? product.inventoryItem!.barcode },
+          afterJson: { orderItemId: line.id, productId: product.id, priceKsh: product.priceKsh!, barcode: product.barcode ?? product.inventoryItem!.barcode, topUpKsh: pricing.topUpKsh, topUpMpesaCode: pricing.mpesaCode },
           reason
         }
       });

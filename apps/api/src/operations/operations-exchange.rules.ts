@@ -1,10 +1,10 @@
 /**
  * Rules for swapping a garment on an order for another (owner request, 2026-11-03).
  *
- * Pure functions, so the rules can be read and tested without a database. Step 1
- * covers the simplest swap: a paid order that has not started picking, a garment
- * of the same price. Dearer garments (the customer tops up), orders already
- * delivered and the "return to exchange" discount come in later steps and are
+ * Pure functions, so the rules can be read and tested without a database. This
+ * covers a paid order that has not started picking, swapped for a garment of the
+ * same price or a dearer one (the customer pays the difference). Orders already
+ * delivered and the "return to exchange" discount come in a later step and are
  * refused here with a message that says so.
  */
 import { BadRequestException, ConflictException } from "@nestjs/common";
@@ -44,14 +44,54 @@ export function assertCanExchange(state: ExchangeOrderState): void {
   }
 }
 
-/** Step 1: the new garment must cost exactly what the old one did. */
-export function assertSamePrice(oldPriceKsh: number, newPriceKsh: number): void {
+export type TopUpInput = { amountKsh?: unknown; mpesaCode?: unknown };
+
+/** An M-Pesa transaction code: ten upper-case letters and digits. */
+export function normalizeTopUpCode(value: unknown): string | null {
+  const text = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return text.length > 0 ? text : null;
+}
+
+/**
+ * What the customer pays for this swap. A cheaper garment is refused (use a return
+ * and refund). The same price needs no payment. A dearer garment needs the whole
+ * difference, and staff must type the M-Pesa code of the payment that covers it
+ * and the amount, which has to match exactly so a typo cannot be recorded as paid.
+ */
+export function exchangePricing(oldPriceKsh: number, newPriceKsh: number, topUp: TopUpInput): { topUpKsh: number; mpesaCode: string | null } {
+  const code = normalizeTopUpCode(topUp.mpesaCode);
   if (newPriceKsh < oldPriceKsh) {
     throw new BadRequestException("Choose an item priced the same or higher. A cheaper item cannot be swapped in; use a return and refund instead.");
   }
-  if (newPriceKsh > oldPriceKsh) {
-    throw new BadRequestException(`That item costs KSh ${newPriceKsh - oldPriceKsh} more. Exchanges with a top-up are not available yet; choose an item at the same price.`);
+  const difference = newPriceKsh - oldPriceKsh;
+  if (difference === 0) {
+    if (code || (topUp.amountKsh !== undefined && topUp.amountKsh !== null && topUp.amountKsh !== "")) {
+      throw new BadRequestException("This swap needs no payment. Leave the top-up amount and M-Pesa code empty.");
+    }
+    return { topUpKsh: 0, mpesaCode: null };
   }
+  if (!code) throw new BadRequestException(`That item costs KSh ${difference} more. Collect KSh ${difference} by M-Pesa from the customer, then enter the transaction code and the amount.`);
+  if (!/^[A-Z0-9]{10}$/.test(code)) throw new BadRequestException("The M-Pesa code must be 10 letters and digits, for example QGH7XY1234.");
+  if (Number(topUp.amountKsh) !== difference) throw new BadRequestException(`The difference is KSh ${difference}. The top-up amount entered does not match.`);
+  return { topUpKsh: difference, mpesaCode: code };
+}
+
+/**
+ * A top-up raises the order total, so a commission that has not been paid out is
+ * recalculated on what the customer actually paid. One already paid (or in a
+ * payout batch) cannot be changed silently and blocks the top-up.
+ */
+export function assertCommissionRecalculable(commission: { status: string; payoutId: string | null } | null): boolean {
+  if (!commission || commission.status === "REJECTED") return false;
+  if (commission.status === "PAID" || commission.payoutId) {
+    throw new ConflictException("The commission on this order has already been paid out, so a top-up cannot be added. Ask finance.");
+  }
+  return true;
+}
+
+/** Same rounding as the commission created when an order is paid. */
+export function commissionForSubtotal(subtotalKsh: number, rateBps: number): number {
+  return Math.round((subtotalKsh * rateBps) / 10000);
 }
 
 export type ExchangeCandidate = {

@@ -2079,8 +2079,10 @@ model OrderExchange {
   newProductId           String
   oldPriceKsh            Int
   newPriceKsh            Int
-  /// What the customer pays on top. Step 1 exchanges are same-price, so zero.
+  /// What the customer pays on top. Zero for a same-price swap.
   topUpKsh               Int               @default(0)
+  /// The M-Pesa transaction code staff typed in for that top-up. Unique, so one payment cannot be used twice.
+  topUpMpesaCode         String?           @unique
   /// Only a RETURN_TO_EXCHANGE carries a discount.
   discountKsh            Int               @default(0)
   reason                 String

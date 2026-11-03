@@ -88,6 +88,7 @@ test("a 1/200 refund installment cannot close the case or restock; the remaining
     },
     refundRecord: { create: async ({ data }: { data: { amountKsh: number } }) => { record.refunds.push(data); return data; } },
     // A return accepted before refund requests existed has none, and keeps working.
+    orderExchange: { aggregate: async () => ({ _sum: { topUpKsh: null } }) },
     refundRequest: { findMany: async () => [] },
     customerServiceCase: { update: async (args: unknown) => { caseUpdates.push(args); return {}; } },
     auditLog: { create: async () => ({}) }
@@ -141,6 +142,7 @@ function receiveFixture(photoCount: number) {
     order: { findUnique: async () => order },
     afterSaleEvent: { findUnique: async () => null, create: async () => ({}) },
     afterSaleReturnPhoto: { count: async () => photoCount },
+    orderExchange: { aggregate: async () => ({ _sum: { topUpKsh: null } }) },
     refundRequest: {
       count: async () => requests.length,
       create: async ({ data }: { data: Record<string, unknown> }) => { const row = { id: "request", status: "PENDING_APPROVAL", ...data }; requests.push(row); return row; }
@@ -290,6 +292,7 @@ test("recording a refund needs the approved request, and the request is closed o
     afterSaleEvent: { findUnique: async () => null, create: async () => ({}) },
     afterSaleReturn: { update: async ({ data }: { data: { status: string } }) => { Object.assign(record, data); return record; }, findUniqueOrThrow: async () => record, findMany: async () => [record] },
     refundRecord: { create: async ({ data }: { data: { amountKsh: number } }) => { record.refunds.push(data); return { id: `record-${record.refunds.length}`, ...data }; } },
+    orderExchange: { aggregate: async () => ({ _sum: { topUpKsh: null } }) },
     refundRequest: { findMany: async () => [{ ...request }], update: async ({ data }: { data: Record<string, unknown> }) => { requestUpdates.push(data); Object.assign(request, data); return request; } },
     customerServiceCase: { update: async () => ({}) },
     auditLog: { create: async ({ data }: { data: Record<string, unknown> }) => { audits.push(data); return {}; } }
