@@ -199,9 +199,13 @@ amount, which must equal the difference; the code must be 10 letters and digits
 and unused by any other exchange or recorded payment. The order line price, the
 order item subtotal and total rise by the difference, and a commission that is
 not yet paid out is recalculated on the new subtotal (a commission already paid
-out, or in a payout batch, blocks the top-up). The top-up is stored on the
-exchange row, not as a payment row, so it does not touch the M-Pesa payment
-records; it is counted towards the amount a later refund may reach.
+out, or in a payout batch, blocks the top-up). The top-up is recorded twice: on the
+exchange row, and as a settled `Payment` of kind `EXCHANGE_TOPUP` carrying the
+M-Pesa code (nothing is sent to M-Pesa and the reconciliation jobs ignore it). It
+is real money received, so the order's successful payments still cover its raised
+total, and a later refund may reach it. Revenue reports count an order as sold on
+its FULL or BALANCE payment only, so a top-up adds to cash received but not to
+the number of sales.
 
 ### Exchanges on delivered orders
 
@@ -225,13 +229,24 @@ the old garment back at the counter and takes the new one.
 a delivered order, with a reason, once per order, and takes KSh 80 off the
 top-up (`EXCHANGE_RETURN_DISCOUNT_KSH`). The discount is not part of commission.
 An order that has a return cannot be exchanged, and one with an open exchange
-cannot be exchanged again.
+cannot be exchanged again. The other way round, a return or a refund request is
+refused while an exchange is open on that garment (on the order, for a whole-order
+refund), and on any order that was changed from a return to an exchange.
 
 Commission is calculated on what the customer actually paid. A commission that
 is not yet paid out is recalculated on the new subtotal. One already paid out is
-left alone and the result says so; a negative adjustment line in the next
-commission export is planned, not built. Exchange lines are not yet in the
-returns export (the columns are reserved).
+left alone: its amount is not edited, and the difference (new commission minus
+the amount paid, signed) is recorded as a `CommissionExchangeAdjustment`. The
+payout 导出 panel lists each unsettled adjustment as a 待付 line marked
+"换货调整" for the affiliate, netted into their total in the summary view, so
+finance adds it to or takes it off the next manual transfer. It is settled
+(stops being listed) when that affiliate's next payout is recorded. It does not
+change the weekly sheet's totals or the M-Pesa bulk file.
+
+The returns 导出 button lists exchanges on the same sheet, one line each, with
+the new item, top-up, discount and the top-up's M-Pesa code. Its filter has a
+third choice, exchange top-ups only, for checking customer payments against the
+M-Pesa statement.
 
 ## Refunds
 

@@ -662,6 +662,10 @@ enum PaymentKind {
   FULL
   DEPOSIT
   BALANCE
+  /// The extra money a customer pays when exchanging for a dearer garment.
+  /// Recorded by staff from the customer's M-Pesa message, already settled; it
+  /// never goes through the STK push or the reconciliation jobs.
+  EXCHANGE_TOPUP
 }
 
 enum PaymentStatus {
@@ -1744,6 +1748,7 @@ model Commission {
   orderSubtotalKsh    Int
   commissionAmountKsh Int
   adjustments         CommissionAdjustment[]
+  exchangeAdjustments CommissionExchangeAdjustment[]
   eligibleAt          DateTime?
   confirmedAt         DateTime?
   rejectedAt          DateTime?
@@ -2112,6 +2117,7 @@ model OrderExchange {
   completedAt            DateTime?
   order                  Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
   photos                 OrderExchangePhoto[]
+  commissionAdjustment   CommissionExchangeAdjustment?
   createdAt              DateTime          @default(now())
 
   @@index([orderId, createdAt])
@@ -2244,4 +2250,29 @@ model AfterSaleEvent {
 
   @@unique([orderId, idempotencyKey])
   @@index([afterSaleReturnId, createdAt])
+}
+
+/// What finance still owes an affiliate (or must take back) because an exchange
+/// changed the price of an order whose commission was already paid out. The
+/// paid commission itself is never edited; this line is listed in the payout
+/// export until the affiliate's next payout is recorded, and finance applies it
+/// when they transfer by hand.
+model CommissionExchangeAdjustment {
+  id                    String        @id @default(uuid())
+  commissionId          String
+  orderExchangeId       String        @unique
+  /// Signed: positive means pay the affiliate more, negative means take back.
+  amountKsh             Int
+  beforeAmountKsh       Int
+  afterAmountKsh        Int
+  recordedByAdminUserId String
+  /// Set when finance records the affiliate's next payout, i.e. when they have applied this line by hand.
+  settledAt             DateTime?
+  settledPayoutId       String?
+  createdAt             DateTime      @default(now())
+  commission            Commission    @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+  orderExchange         OrderExchange @relation(fields: [orderExchangeId], references: [id], onDelete: Restrict)
+
+  @@index([commissionId])
+  @@index([settledAt])
 }

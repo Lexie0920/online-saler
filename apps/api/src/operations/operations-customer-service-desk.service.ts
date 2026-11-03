@@ -195,8 +195,10 @@ export class OperationsCustomerServiceDeskService {
   }
 
   private presentOrder360(order: Order360Row) {
-    const latestPayment = order.payments[0] ?? null;
-    const successfulPayment = order.payments.find((payment) => payment.status === PaymentStatus.SUCCESS) ?? null;
+    // An exchange top-up is extra money on the same order; the desk shows the order's own payment.
+    const orderPayments = order.payments.filter((payment) => payment.kind !== "EXCHANGE_TOPUP");
+    const latestPayment = orderPayments[0] ?? order.payments[0] ?? null;
+    const successfulPayment = orderPayments.find((payment) => payment.status === PaymentStatus.SUCCESS) ?? null;
     const fulfillment = order.fulfillment;
     const now = new Date();
 

@@ -30,7 +30,7 @@ export function ReturnsExportButton(props: { accessToken: string; disabled?: boo
   const [open, setOpen] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [toRefundOnly, setToRefundOnly] = useState(false);
+  const [filter, setFilter] = useState<"all" | "to-refund" | "top-ups">("all");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const box = useRef<HTMLDivElement | null>(null);
@@ -51,10 +51,10 @@ export function ReturnsExportButton(props: { accessToken: string; disabled?: boo
     setMessage("");
     try {
       const result = await operationsRequester(accessToken)<ExportResult>("/operations/after-sales/export", {
-        query: { from: from || undefined, to: to || undefined, filter: toRefundOnly ? "to-refund" : "all" }
+        query: { from: from || undefined, to: to || undefined, filter }
       });
       if (result.lineCount === 0) {
-        setMessage(t("所选日期范围内没有退货记录。"));
+        setMessage(t("所选日期范围内没有退货或换货记录。"));
         return;
       }
       downloadCsv(result.fileName, result.csv);
@@ -74,15 +74,19 @@ export function ReturnsExportButton(props: { accessToken: string; disabled?: boo
       {open ? (
         <div className="bg-card absolute right-0 top-full z-30 mt-2 flex w-[22rem] max-w-[90vw] flex-col gap-3 rounded-lg border p-4 text-sm shadow-lg" role="dialog" aria-label={t("导出退货记录")}>
           <div className="font-medium">{t("导出退货记录")}</div>
-          <p className="text-muted-foreground">{t("每件退回的衣服一行：原因、经手人、退款进度。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。")}</p>
+          <p className="text-muted-foreground">{t("每件退回或换货的衣服一行：原因、经手人、退款进度、补差价和 M-Pesa 交易码。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。")}</p>
           <div className="flex items-center gap-2">
             <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} aria-label={t("退货记录的开始日期")} />
             <span>–</span>
             <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} aria-label={t("退货记录的结束日期")} />
           </div>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={toRefundOnly} onChange={(event) => setToRefundOnly(event.target.checked)} />
-            {t("只看已批准、还没退款的")}
+          <label className="flex flex-col gap-1">
+            {t("导出哪些记录")}
+            <select className="border-input bg-background h-9 rounded-md border px-2" value={filter} onChange={(event) => setFilter(event.target.value as "all" | "to-refund" | "top-ups")}>
+              <option value="all">{t("全部退货和换货")}</option>
+              <option value="to-refund">{t("只看已批准、还没退款的")}</option>
+              <option value="top-ups">{t("只看换货补差价（核对顾客付款）")}</option>
+            </select>
           </label>
           <Button disabled={busy || !datesReady} onClick={() => void download()}>
             <DownloadIcon className="size-4" /> {t("下载 Excel 可打开的文件")}

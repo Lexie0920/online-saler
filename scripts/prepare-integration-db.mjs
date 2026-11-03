@@ -39,7 +39,9 @@ const migrations = [
   "20261102150000_after_sale_return_photos",
   "20261103120000_order_exchanges",
   "20261103130000_order_exchange_top_up_code",
-  "20261103140000_order_exchange_returns"
+  "20261103140000_order_exchange_returns",
+  "20261103150000_payment_kind_exchange_topup",
+  "20261103160000_commission_exchange_adjustments"
 ];
 const raw = process.env.MVP_INTEGRATION_DATABASE_URL;
 if (!raw) throw new Error("MVP_INTEGRATION_DATABASE_URL must name a disposable local test database.");

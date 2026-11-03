@@ -57,7 +57,7 @@ test("every line has one cell per header, exchange columns empty", () => {
   assert.equal(lines[0].split(",").length, AFTER_SALES_EXPORT_HEADER.length);
   assert.equal(lines[1].split(",").length, AFTER_SALES_EXPORT_HEADER.length);
   assert.match(lines[1], /^Return,2026-11-01,,OS-1001,B0001,Blue shirt,NOT_SATISFIED,Amina,254700000001,/);
-  assert.ok(lines[1].endsWith(",,,"));
+  assert.ok(lines[1].endsWith(",,,,"));
 });
 
 test("to-refund keeps only approved refunds not yet paid out, and totals what is owed", () => {
@@ -86,4 +86,19 @@ test("a customer-typed name that Excel would read as a formula is neutralised, a
   assert.match(lines[1], /OS-1/);
   assert.match(lines[2], /'=HYPERLINK/);
   assert.equal(file.summary.truncated, true);
+});
+
+test("exchanges share the sheet, and top-ups lists only those where the customer paid extra", () => {
+  const exchange = (overrides: Partial<AfterSalesExportItem> = {}) =>
+    item({ type: "EXCHANGE", orderNumber: "OS-3001", refundRequestStatus: null, refundApprovedKsh: null, newItem: "Red coat", topUpKsh: 150, discountKsh: 80, topUpMpesaCode: "QGH7XY1234", returnStatus: "COMPLETED", ...overrides });
+  const items = [item(), exchange(), exchange({ orderNumber: "OS-3002", topUpKsh: 0, discountKsh: 0, topUpMpesaCode: null })];
+  const all = buildAfterSalesExport(items, parseAfterSalesExportOptions({}, NOW), false);
+  assert.equal(all.lineCount, 3);
+  assert.match(all.csv, /\nExchange,2026-11-01,,OS-3001,.*,Red coat,150,80,QGH7XY1234\n/);
+  const topUps = buildAfterSalesExport(items, parseAfterSalesExportOptions({ filter: "top-ups" }, NOW), false);
+  assert.equal(topUps.lineCount, 1);
+  assert.match(topUps.csv, /OS-3001/);
+  const toRefund = buildAfterSalesExport(items, parseAfterSalesExportOptions({ filter: "to-refund" }, NOW), false);
+  assert.equal(toRefund.lineCount, 1);
+  assert.doesNotMatch(toRefund.csv, /OS-3001/);
 });

@@ -157,6 +157,7 @@ function fixture(t: TestContext, options: { commissions?: Row[]; fees?: Row[]; p
         return { count: rows.length };
       }
     },
+    commissionExchangeAdjustment: { findMany: async () => [], updateMany: async () => ({ count: 0 }) },
     payout: {
       findUnique: async ({ where }: { where: { mpesaCode: string } }) => payouts.find((p) => p.mpesaCode === where.mpesaCode) ?? null,
       findMany: async ({ where }: { where: Row }) =>

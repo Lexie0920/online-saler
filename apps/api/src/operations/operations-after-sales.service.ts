@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { ActorType, AfterSaleReturnReason, AfterSaleReturnStatus, CommissionAdjustmentKind, CommissionStatus, CustomerServiceCaseStatus, CustomerServiceCaseType, CustomerServiceIssueType, FulfillmentNodeStatus, InventoryItemStatus, InventoryMovementType, OrderStatus, PaymentStatus, Prisma, ProductStatus, RefundKind, RefundRequestStatus, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
+import { assertNoExchangeBlocksReturn } from "./operations-exchange.rules";
 import { OperationsAccessService } from "./operations-access.service";
 import { assertRefundAmount, assertReturnPhotoCount, refundGate, assertReturnWindow, commissionShares, requiredText, RETURN_PHOTO_MAX, RETURN_REASONS, returnPhotoContentType } from "./operations-after-sales.rules";
 import { ProductImageStorageService } from "../product/product-image-storage.service";
@@ -65,12 +66,25 @@ export class OperationsAfterSalesService {
         refunds: { orderBy: { recordedAt: "asc" } }
       }
     });
-    const truncated = found.length > AFTER_SALES_EXPORT_ROW_LIMIT;
-    const records = truncated ? found.slice(0, AFTER_SALES_EXPORT_ROW_LIMIT) : found;
+    // Exchanges are on the same sheet. Every status is kept, cancelled ones included, so a top-up
+    // that was taken and then has to be paid back is still visible to the person checking payments.
+    const foundExchanges = await prisma.orderExchange.findMany({
+      where: { createdAt: { gte: options.start, lt: options.end } },
+      orderBy: { createdAt: "asc" },
+      take: AFTER_SALES_EXPORT_ROW_LIMIT + 1,
+      include: { order: { select: { orderNumber: true, customer: { select: { displayName: true, phone: true } } } }, photos: { select: { id: true } } }
+    });
+    const truncated = found.length > AFTER_SALES_EXPORT_ROW_LIMIT || foundExchanges.length > AFTER_SALES_EXPORT_ROW_LIMIT;
+    const records = found.slice(0, AFTER_SALES_EXPORT_ROW_LIMIT);
+    const exchanges = foundExchanges.slice(0, AFTER_SALES_EXPORT_ROW_LIMIT);
+    const productIds = [...new Set(exchanges.flatMap((row) => [row.oldProductId, row.newProductId]))];
+    const products = productIds.length ? await prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, title: true, barcode: true } }) : [];
+    const productOf = (id: string) => products.find((row) => row.id === id) ?? null;
     const staffIds = new Set<string>();
     for (const record of records) {
       for (const id of [record.requestedByAdminUserId, record.receivedByAdminUserId, record.refundRequests[0]?.reviewedByAdminUserId]) if (id) staffIds.add(id);
     }
+    for (const row of exchanges) for (const id of [row.performedByAdminUserId, row.receivedByAdminUserId, row.reviewedByAdminUserId]) if (id) staffIds.add(id);
     const staff = staffIds.size ? await prisma.adminUser.findMany({ where: { id: { in: [...staffIds] } }, select: { id: true, name: true } }) : [];
     const nameOf = (id: string | null | undefined) => (id ? staff.find((person) => person.id === id)?.name ?? null : null);
     const items: AfterSalesExportItem[] = records.map((record) => {
@@ -100,6 +114,35 @@ export class OperationsAfterSalesService {
         photoCount: record.photos.length
       };
     });
+    for (const row of exchanges) {
+      items.push({
+        type: "EXCHANGE",
+        requestedAt: row.createdAt,
+        completedAt: row.completedAt,
+        orderNumber: row.order.orderNumber,
+        barcode: productOf(row.oldProductId)?.barcode ?? null,
+        title: productOf(row.oldProductId)?.title ?? "",
+        reason: row.kind === "RETURN_TO_EXCHANGE" ? "RETURN_TO_EXCHANGE" : "EXCHANGE",
+        note: row.reason,
+        customerName: row.order.customer?.displayName ?? null,
+        customerPhone: row.order.customer?.phone ?? null,
+        returnStatus: row.status,
+        itemPriceKsh: row.oldPriceKsh,
+        refundRequestStatus: null,
+        refundApprovedKsh: null,
+        refundedKsh: 0,
+        refundedAt: null,
+        mpesaReference: null,
+        requestedBy: nameOf(row.performedByAdminUserId),
+        receivedBy: nameOf(row.receivedByAdminUserId),
+        approvedBy: nameOf(row.reviewedByAdminUserId),
+        photoCount: row.photos.length,
+        newItem: productOf(row.newProductId)?.title ?? null,
+        topUpKsh: row.topUpKsh,
+        discountKsh: row.discountKsh,
+        topUpMpesaCode: row.topUpMpesaCode
+      });
+    }
     const file = buildAfterSalesExport(items, options, truncated);
     await prisma.auditLog.create({
       data: {
@@ -112,7 +155,7 @@ export class OperationsAfterSalesService {
         entityId: file.fileName,
         action: "EXPORT",
         afterJson: { filter: options.filter, from: options.firstDay, to: options.lastDay, lines: file.lineCount, truncated },
-        reason: "Downloaded the returns record sheet."
+        reason: "Downloaded the returns and exchanges record sheet."
       }
     });
     return file;
@@ -237,6 +280,7 @@ export class OperationsAfterSalesService {
     const item = order.items.find((row) => row.id === input.orderItemId);
     if (!item || item.quantity !== 1) throw new BadRequestException("Select one unique item belonging to this order.");
     if (order.afterSaleReturns.some((row) => row.orderItemId === item.id)) throw new ConflictException("This sold item already has an after-sales record; continue that record.");
+    assertNoExchangeBlocksReturn(await tx.orderExchange.findMany({ where: { orderId: order.id }, select: { orderItemId: true, kind: true, status: true } }), item.id);
     // A named store is where the customer is told to bring the item; it also
     // puts the return on that store's "to receive" list. Null keeps the old
     // behaviour, which was always the warehouse.
@@ -257,8 +301,7 @@ export class OperationsAfterSalesService {
     const itemRefunded = record.refunds.reduce((sum, row) => sum + row.amountKsh, 0);
     const totalRefunded = order.afterSaleReturns.flatMap((row) => row.refunds).reduce((sum, row) => sum + row.amountKsh, 0);
     // A top-up paid for an exchange is real money the customer handed over, so it counts towards what can be refunded.
-    const topUps = await tx.orderExchange.aggregate({ where: { orderId: order.id }, _sum: { topUpKsh: true } });
-    const paymentAmount = order.payments.filter((row) => row.status === PaymentStatus.SUCCESS).reduce((sum, row) => sum + row.amountKsh, 0) + (topUps._sum.topUpKsh ?? 0);
+    const paymentAmount = order.payments.filter((row) => row.status === PaymentStatus.SUCCESS).reduce((sum, row) => sum + row.amountKsh, 0);
     assertRefundAmount(input.amountKsh, record.orderItem.lineTotalKsh, itemRefunded, order.totalKsh, totalRefunded, paymentAmount);
     // The refund must have been approved first. The order is already locked, so
     // lock the requests too: nobody can withdraw one while it is being used.

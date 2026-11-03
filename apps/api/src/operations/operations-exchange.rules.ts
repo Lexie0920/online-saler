@@ -163,3 +163,21 @@ export function assertDifferentPeople(receiverAdminUserId: string | null, review
     throw new ForbiddenException("The person who received the item cannot also approve the exchange.");
   }
 }
+
+export type ExchangeBlockState = { orderItemId: string; kind: string; status: string };
+
+const OPEN_EXCHANGE_STATUSES = ["AWAITING_RETURN", "PENDING_REVIEW", "REJECTED"];
+
+/**
+ * An order that is mid-exchange, or was converted from a return to an exchange,
+ * cannot also be returned or refunded: that would pay out twice for one case.
+ * Pass the order item for a return of one garment, or nothing for a whole-order refund.
+ */
+export function assertNoExchangeBlocksReturn(exchanges: ExchangeBlockState[], orderItemId?: string): void {
+  if (exchanges.some((row) => OPEN_EXCHANGE_STATUSES.includes(row.status) && (!orderItemId || row.orderItemId === orderItemId))) {
+    throw new ConflictException("An exchange is still open on this order. Finish or cancel the exchange before returning or refunding.");
+  }
+  if (exchanges.some((row) => row.kind === "RETURN_TO_EXCHANGE" && row.status !== "CANCELLED")) {
+    throw new ConflictException("This order was changed from a return to an exchange, so it cannot also be returned or refunded.");
+  }
+}

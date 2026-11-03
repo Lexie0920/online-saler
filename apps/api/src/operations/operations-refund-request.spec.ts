@@ -82,6 +82,7 @@ function harness(t: TestContext, options: HarnessOptions = {}) {
         };
       }
     },
+    orderExchange: { findMany: async () => [] },
     customerServiceCase: {
       findUnique: async () => ({ orderId: "order-1" }),
       update: async ({ data }: { data: Record<string, unknown> }) => {

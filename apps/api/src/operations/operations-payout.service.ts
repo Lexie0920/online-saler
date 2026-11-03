@@ -322,6 +322,14 @@ export async function recordPayout(tx: Db, input: {
     }
   });
 
+  if (row.payeeType === "AFFILIATE" && row.affiliateId) {
+    // Exchange adjustments listed for this affiliate have now been applied by hand to this transfer.
+    await tx.commissionExchangeAdjustment.updateMany({
+      where: { settledAt: null, commission: { affiliateId: row.affiliateId } },
+      data: { settledAt: now, settledPayoutId: payout.id }
+    });
+  }
+
   const commissionIds = row.items.filter((item) => item.kind === "COMMISSION").map((item) => item.id);
   const feeIds = row.items.filter((item) => item.kind === "RIDER_FEE").map((item) => item.id);
   const paymentNote = [`Weekly payout ${week.firstDay}~${week.lastDay}`, `M-Pesa ${mpesaCode}`, note].filter(Boolean).join(" · ");
@@ -629,6 +637,37 @@ export async function loadExportItems(tx: Db, options: ExportOptions, now: Date)
         payoutId: commission.payout?.id ?? null,
         paidAt: commission.payout?.paidAt ?? commission.paidAt,
         mpesaCode: commission.payout?.mpesaCode ?? null
+      });
+    }
+  }
+
+  if (options.includeAffiliate && wantPending) {
+    // Exchanges that changed the price of an order whose commission was already paid out.
+    // The paid commission is untouched; each line is the signed difference to apply by hand
+    // to the affiliate's next transfer, and it stays here until that payout is recorded.
+    const adjustments = await tx.commissionExchangeAdjustment.findMany({
+      where: { settledAt: null, ...(window ? { createdAt: window } : {}) },
+      include: { commission: { include: { affiliate: affiliateSelect, order: { select: { orderNumber: true, createdAt: true } } } } },
+      orderBy: { createdAt: "asc" },
+      take: EXPORT_ROW_LIMIT
+    });
+    if (adjustments.length >= EXPORT_ROW_LIMIT) truncated = true;
+    for (const adjustment of adjustments) {
+      const commission = adjustment.commission;
+      items.push({
+        status: "pending",
+        kind: "ADJUSTMENT",
+        payeeKey: `affiliate:${commission.affiliateId}`,
+        payeeType: "AFFILIATE",
+        name: commission.affiliate.displayName,
+        phone: commission.affiliate.phone ?? commission.affiliate.customer?.phone ?? null,
+        orderNumber: commission.order.orderNumber,
+        orderDate: commission.order.createdAt,
+        attributedAt: adjustment.createdAt,
+        amountKsh: adjustment.amountKsh,
+        payoutId: null,
+        paidAt: null,
+        mpesaCode: null
       });
     }
   }

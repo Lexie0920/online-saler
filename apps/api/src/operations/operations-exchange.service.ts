@@ -1,10 +1,38 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { ActorType, InventoryItemStatus, OrderExchangeKind, Prisma, SourceApp, prisma } from "@online-saler/database";
+import { ActorType, InventoryItemStatus, OrderExchangeKind, PaymentKind, PaymentStatus, Prisma, SourceApp, prisma } from "@online-saler/database";
 import { OperationsAccessService } from "./operations-access.service";
 import { assertCandidateAvailable, assertCanExchange, assertCommissionRecalculable, commissionForSubtotal, exchangePricing, exchangeReason } from "./operations-exchange.rules";
 import { refreshWarehouseLocationStatuses } from "./warehouse-capacity";
 
 export type ExchangeInput = { orderItemId?: string; newBarcode?: string; reason?: string; topUpAmountKsh?: number; topUpMpesaCode?: string };
+
+/**
+ * Records the money a customer paid for an exchange as a settled Payment, so it
+ * counts as cash received and the order's payments still cover its (raised) total.
+ * The phone is the number the order was first paid from. Nothing is sent to M-Pesa.
+ */
+export async function recordTopUpPayment(
+  tx: Prisma.TransactionClient,
+  input: { orderId: string; exchangeId: string; amountKsh: number; mpesaCode: string }
+) {
+  const earlier = await tx.payment.findFirst({ where: { orderId: input.orderId }, orderBy: { requestedAt: "asc" }, select: { phone: true } });
+  if (!earlier) throw new BadRequestException("This order has no payment on record to attach the top-up to.");
+  const now = new Date();
+  return tx.payment.create({
+    data: {
+      orderId: input.orderId,
+      kind: PaymentKind.EXCHANGE_TOPUP,
+      status: PaymentStatus.SUCCESS,
+      amountKsh: input.amountKsh,
+      phone: earlier.phone,
+      idempotencyKey: `exchange-topup:${input.exchangeId}`,
+      providerReceiptNumber: input.mpesaCode,
+      providerResultDescription: "Recorded by staff for an exchange",
+      requestedAt: now,
+      completedAt: now
+    }
+  });
+}
 
 export const PRODUCT_INCLUDE = {
   images: { orderBy: { sortOrder: "asc" as const }, take: 1 },
@@ -165,6 +193,7 @@ export class OperationsExchangeService {
           performedByAdminUserId: session.adminUser!.id
         }
       });
+      if (pricing.topUpKsh > 0) await recordTopUpPayment(tx, { orderId: order.id, exchangeId: exchange.id, amountKsh: pricing.topUpKsh, mpesaCode: pricing.mpesaCode! });
       await tx.auditLog.create({
         data: {
           actorType: ActorType.EMPLOYEE,

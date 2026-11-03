@@ -132,6 +132,7 @@ function fixture(t: TestContext, options: { permissions?: string[] } = {}) {
         return { count: rows.length };
       }
     },
+    commissionExchangeAdjustment: { findMany: async () => [], updateMany: async () => ({ count: 0 }) },
     payout: {
       findUnique: async ({ where }: { where: { mpesaCode: string } }) => payouts.find((p) => p.mpesaCode === where.mpesaCode) ?? null,
       findMany: async ({ where }: { where: Row }) => payouts.filter((p) => matches(p, where)).map((p) => ({ ...p, paidByAdminUser: { name: "Titus Mwangi" } })),

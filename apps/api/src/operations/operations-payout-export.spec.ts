@@ -145,3 +145,17 @@ test("csv: quotes where needed, defuses formulas, leaves phone numbers alone", (
   assert.equal(exportCsvCell(null), "");
   assert.equal(exportCsv(["a", "b"], [["x", 1]]), "a,b\nx,1\n");
 });
+
+test("an exchange adjustment on an already-paid commission nets into the person's total and is explained", () => {
+  const items = [item({ amountKsh: 200 }), item({ kind: "ADJUSTMENT", orderNumber: "DL-2", amountKsh: -30 })];
+  const summary = buildExportRows(items, "summary");
+  assert.equal(summary.rows.length, 1);
+  assert.equal(summary.rows[0][5], 170);
+  assert.match(String(summary.rows[0][9]), /换货调整/);
+  const detail = buildExportRows(items, "detail");
+  assert.equal(detail.rows.length, 2);
+  const adjustment = detail.rows.find((row) => row[4] === "DL-2")!;
+  assert.equal(adjustment[8], -30);
+  assert.match(String(adjustment[11]), /换货调整/);
+  assert.equal(detail.rows.find((row) => row[4] === "DL-1")![11], "");
+});

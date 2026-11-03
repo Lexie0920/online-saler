@@ -10,6 +10,7 @@ import {
   SourceApp,
   prisma
 } from "@online-saler/database";
+import { assertNoExchangeBlocksReturn } from "./operations-exchange.rules";
 import { OperationsAccessService } from "./operations-access.service";
 
 /**
@@ -119,6 +120,7 @@ export class OperationsRefundRequestService {
         }
       });
       if (!order) throw new NotFoundException("Order was not found.");
+      assertNoExchangeBlocksReturn(await tx.orderExchange.findMany({ where: { orderId }, select: { orderItemId: true, kind: true, status: true } }));
 
       const paidKsh = order.payments.reduce((sum, payment) => sum + payment.amountKsh, 0);
       if (paidKsh <= 0) throw new BadRequestException("This order has no successful payment to refund.");

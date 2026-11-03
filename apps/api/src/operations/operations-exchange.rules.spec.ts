@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertCandidateAvailable, assertCanExchange, assertCanExchangeDelivered, assertCommissionRecalculable, assertDifferentPeople, commissionForSubtotal, exchangePricing, exchangeReason, returnToExchangeDiscount, type DeliveredExchangeState, type ExchangeOrderState } from "./operations-exchange.rules";
+import { assertCandidateAvailable, assertCanExchange, assertCanExchangeDelivered, assertCommissionRecalculable, assertDifferentPeople, assertNoExchangeBlocksReturn, commissionForSubtotal, exchangePricing, exchangeReason, returnToExchangeDiscount, type DeliveredExchangeState, type ExchangeOrderState } from "./operations-exchange.rules";
 
 const OK: ExchangeOrderState = { orderStatus: "PAID", fulfillmentStatus: "PAID", fulfillmentItemStatus: "PENDING", inventoryStatus: "PAID", hasReturn: false };
 const CANDIDATE = { status: "PUBLISHED", priceKsh: 400, inventoryStatus: "AVAILABLE", alreadyOnOrder: false, sameAsCurrent: false };
@@ -99,4 +99,18 @@ test("the person who received the old item cannot approve the exchange", () => {
   assertDifferentPeople(null, "b");
   assertDifferentPeople("a", "b");
   assert.throws(() => assertDifferentPeople("a", "a"), /cannot also approve/);
+});
+
+test("an open exchange, or a return turned into an exchange, blocks returns and refunds", () => {
+  const open = { orderItemId: "i1", kind: "STANDARD", status: "AWAITING_RETURN" };
+  const done = { orderItemId: "i1", kind: "STANDARD", status: "COMPLETED" };
+  const converted = { orderItemId: "i1", kind: "RETURN_TO_EXCHANGE", status: "COMPLETED" };
+  assertNoExchangeBlocksReturn([], "i1");
+  assertNoExchangeBlocksReturn([done], "i1");
+  assertNoExchangeBlocksReturn([{ ...converted, status: "CANCELLED" }]);
+  assert.throws(() => assertNoExchangeBlocksReturn([open], "i1"), /still open/);
+  assert.throws(() => assertNoExchangeBlocksReturn([open]), /still open/);
+  assertNoExchangeBlocksReturn([open], "i2");
+  assert.throws(() => assertNoExchangeBlocksReturn([converted], "i2"), /from a return to an exchange/);
+  assert.throws(() => assertNoExchangeBlocksReturn([{ ...converted, status: "REJECTED" }]), /still open|from a return/);
 });

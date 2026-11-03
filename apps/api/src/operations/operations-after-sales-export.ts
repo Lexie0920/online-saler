@@ -1,13 +1,13 @@
 /**
- * The returns record sheet (the 导出 button on the after-sales orders page), as pure functions.
+ * The returns and exchanges record sheet (the 导出 button on the after-sales orders page), as pure functions.
  *
  * One line per returned garment: what came back, why, who handled it, and where its
  * refund stands. Finance uses it to find the refunds still to be sent by hand in
  * M-Pesa; the team uses it to look back at what is being returned and why.
  *
- * Exchanges will add their own lines to this sheet later, so the columns that only
- * an exchange fills (the new garment, the top-up, the discount) are already here
- * and stay empty for returns. Nothing in this file changes data; the loader that
+ * Exchanges are on the same sheet, one line each: the old garment, the new one,
+ * the top-up the customer paid with its M-Pesa code (so staff can check it
+ * against the statement), and any discount. Those columns stay empty for returns. Nothing in this file changes data; the loader that
  * reads the database lives in operations-after-sales.service.ts.
  */
 import { NAIROBI_OFFSET_MS, nairobiDay } from "./operations-payout-sheet";
@@ -31,7 +31,7 @@ function csvText(header: string[], rows: CsvCell[][]): string {
 /** The most lines one file carries. Past this the file says it is cut short. */
 export const AFTER_SALES_EXPORT_ROW_LIMIT = 5000;
 
-export type AfterSalesExportFilter = "all" | "to-refund";
+export type AfterSalesExportFilter = "all" | "to-refund" | "top-ups";
 
 export type AfterSalesExportInput = { from?: string; to?: string; filter?: string };
 
@@ -46,7 +46,7 @@ export type AfterSalesExportOptions = {
 
 /** One returned garment, flattened so this file needs no database types. */
 export type AfterSalesExportItem = {
-  type: "RETURN";
+  type: "RETURN" | "EXCHANGE";
   requestedAt: Date;
   completedAt: Date | null;
   orderNumber: string;
@@ -67,6 +67,11 @@ export type AfterSalesExportItem = {
   receivedBy: string | null;
   approvedBy: string | null;
   photoCount: number;
+  /** Exchanges only. */
+  newItem?: string | null;
+  topUpKsh?: number | null;
+  discountKsh?: number | null;
+  topUpMpesaCode?: string | null;
 };
 
 function realDay(value: string | undefined, name: string): number {
@@ -82,7 +87,7 @@ function realDay(value: string | undefined, name: string): number {
 /** Validates the choices. A bad value is refused, never replaced by a default; no dates means the last 30 days. */
 export function parseAfterSalesExportOptions(input: AfterSalesExportInput, now = new Date()): AfterSalesExportOptions {
   const filter = (input.filter?.trim() || "all") as AfterSalesExportFilter;
-  if (filter !== "all" && filter !== "to-refund") throw new Error("filter must be all or to-refund.");
+  if (filter !== "all" && filter !== "to-refund" && filter !== "top-ups") throw new Error("filter must be all, to-refund or top-ups.");
   const hasFrom = Boolean(input.from?.trim());
   const hasTo = Boolean(input.to?.trim());
   if (hasFrom !== hasTo) throw new Error("Give both a start and an end date, or neither.");
@@ -111,7 +116,12 @@ export function afterSalesExportFileName(options: AfterSalesExportOptions): stri
 
 /** An approved refund the money has not yet gone out for. */
 export function needsRefund(item: AfterSalesExportItem): boolean {
-  return item.refundRequestStatus === "APPROVED";
+  return item.type === "RETURN" && item.refundRequestStatus === "APPROVED";
+}
+
+/** An exchange where the customer paid extra: the line staff check against their M-Pesa statement. */
+export function isTopUp(item: AfterSalesExportItem): boolean {
+  return item.type === "EXCHANGE" && (item.topUpKsh ?? 0) > 0;
 }
 
 export const AFTER_SALES_EXPORT_HEADER = [
@@ -124,7 +134,7 @@ export const AFTER_SALES_EXPORT_HEADER = [
   "Reason",
   "Customer",
   "Phone",
-  "Return status",
+  "Status",
   "Item price (KSh)",
   "Refund request",
   "Refund approved (KSh)",
@@ -136,10 +146,11 @@ export const AFTER_SALES_EXPORT_HEADER = [
   "Refund approved by",
   "Photos",
   "Note",
-  // Filled by exchanges once they exist; empty for returns.
+  // Filled for exchanges; empty for returns.
   "New item",
   "Top-up (KSh)",
-  "Discount (KSh)"
+  "Discount (KSh)",
+  "Top-up M-Pesa code"
 ];
 
 function day(value: Date | null): string {
@@ -148,10 +159,10 @@ function day(value: Date | null): string {
 
 export function buildAfterSalesExportRows(items: AfterSalesExportItem[], filter: AfterSalesExportFilter): CsvCell[][] {
   return items
-    .filter((item) => filter === "all" || needsRefund(item))
+    .filter((item) => filter === "all" || (filter === "top-ups" ? isTopUp(item) : needsRefund(item)))
     .sort((a, b) => a.requestedAt.getTime() - b.requestedAt.getTime())
     .map((item) => [
-      item.type === "RETURN" ? "Return" : item.type,
+      item.type === "RETURN" ? "Return" : "Exchange",
       day(item.requestedAt),
       day(item.completedAt),
       item.orderNumber,
@@ -172,9 +183,10 @@ export function buildAfterSalesExportRows(items: AfterSalesExportItem[], filter:
       item.approvedBy,
       item.photoCount,
       item.note,
-      null,
-      null,
-      null
+      item.newItem ?? null,
+      item.topUpKsh ?? null,
+      item.discountKsh ?? null,
+      item.topUpMpesaCode ?? null
     ]);
 }
 

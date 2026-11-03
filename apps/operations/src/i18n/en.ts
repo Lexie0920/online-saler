@@ -3298,4 +3298,9 @@ export const enDictionary: Record<string, string> = {
   "退货转换货（差价减免 KSh 80，每单一次）": "Return to exchange (KSh 80 off the price difference, once per order)",
   "顾客需要补差价时，先收款（M-Pesa），再填写金额和交易码。无需补款留空。": "If the customer must pay a difference, collect it by M-Pesa first, then enter the amount and transaction code. Leave blank if nothing is owed.",
   "验收说明": "Acceptance note",
+  "导出哪些记录": "Which records",
+  "全部退货和换货": "All returns and exchanges",
+  "只看换货补差价（核对顾客付款）": "Exchange top-ups only (to check customer payments)",
+  "所选日期范围内没有退货或换货记录。": "No returns or exchanges in the selected dates.",
+  "每件退回或换货的衣服一行：原因、经手人、退款进度、补差价和 M-Pesa 交易码。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。": "One line per returned or exchanged garment: reason, who handled it, refund progress, top-up and M-Pesa code. Leave the dates empty for the last 30 days. The file holds customer names and phones; do not pass it on.",
 };

@@ -3,6 +3,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { ActorType, InventoryItemStatus, InventoryMovementType, OrderExchangeKind, OrderExchangeStatus, Prisma, SourceApp, WarehouseLocationStatus, prisma } from "@online-saler/database";
 import { ProductImageStorageService } from "../product/product-image-storage.service";
 import { OperationsAccessService } from "./operations-access.service";
+import { recordTopUpPayment } from "./operations-exchange.service";
 import { assertReturnPhotoCount, RETURN_PHOTO_MAX, requiredText, returnPhotoContentType } from "./operations-after-sales.rules";
 import {
   assertCandidateAvailable,
@@ -139,6 +140,7 @@ export class OperationsDeliveredExchangeService {
           performedByAdminUserId: actor.id
         }
       });
+      if (pricing.topUpKsh > 0) await recordTopUpPayment(tx, { orderId, exchangeId: exchange.id, amountKsh: pricing.topUpKsh, mpesaCode: pricing.mpesaCode! });
       await this.audit(tx, actor, exchange.id, "EXCHANGE_REQUEST", reason, { orderItemId: line.id, oldProductId: line.productId }, { newProductId: product.id, topUpKsh: pricing.topUpKsh, discountKsh: pricing.discountKsh, kind: exchange.kind });
       return { exchange };
     });
@@ -240,7 +242,7 @@ export class OperationsDeliveredExchangeService {
 
       const order = await tx.order.findUnique({
         where: { id: orderId },
-        include: { items: { include: { fulfillmentItem: true } }, commission: { select: { id: true, status: true, rateBps: true, payoutId: true } } }
+        include: { items: { include: { fulfillmentItem: true } }, commission: { select: { id: true, status: true, rateBps: true, payoutId: true, commissionAmountKsh: true } } }
       });
       if (!order) throw new NotFoundException("Order was not found.");
       const line = order.items.find((item) => item.id === exchange.orderItemId);
@@ -302,8 +304,22 @@ export class OperationsDeliveredExchangeService {
         const commission = order.commission;
         if (commission && commission.status !== "REJECTED") {
           if (commission.status === "PAID" || commission.payoutId) {
-            // Already paid out (or in a payout batch): left alone and flagged for finance.
-            commissionNote = "already paid out; not adjusted";
+            // Already paid out (or in a payout batch): the paid amount stays as it is, and one
+            // signed line is recorded for the next payout export so finance can settle the difference.
+            const delta = commissionForSubtotal(newSubtotal, commission.rateBps) - commission.commissionAmountKsh;
+            if (delta !== 0) {
+              await tx.commissionExchangeAdjustment.create({
+                data: {
+                  commissionId: commission.id,
+                  orderExchangeId: exchange.id,
+                  amountKsh: delta,
+                  beforeAmountKsh: commission.commissionAmountKsh,
+                  afterAmountKsh: commission.commissionAmountKsh + delta,
+                  recordedByAdminUserId: actor.id
+                }
+              });
+            }
+            commissionNote = delta !== 0 ? `already paid out; adjustment of KSh ${delta} recorded for the next payout export` : "already paid out; no difference";
           } else if (assertCommissionRecalculable(commission)) {
             await tx.commission.update({
               where: { id: commission.id },

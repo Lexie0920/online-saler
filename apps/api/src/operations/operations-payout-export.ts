@@ -47,7 +47,7 @@ export type ExportOptions = {
 
 export type ExportItem = {
   status: "pending" | "paid";
-  kind: "COMMISSION" | "RIDER_FEE";
+  kind: "COMMISSION" | "RIDER_FEE" | "ADJUSTMENT";
   payeeKey: string;
   payeeType: "AFFILIATE" | "RIDER";
   name: string;
@@ -156,6 +156,12 @@ function phoneNote(item: Pick<ExportItem, "status" | "phone">): string {
   return "";
 }
 
+const ADJUSTMENT_NOTE = "换货调整：这笔佣金已付过，差额请在下次转账时加上或扣掉（负数为扣掉）";
+
+function noteOf(item: Pick<ExportItem, "status" | "phone" | "kind">): string {
+  return [item.kind === "ADJUSTMENT" ? ADJUSTMENT_NOTE : "", phoneNote(item)].filter(Boolean).join("；");
+}
+
 export type CsvCell = string | number | null;
 
 export const SUMMARY_HEADER = ["状态", "类型", "姓名", "电话", "笔数", "金额(KSh)", "所属周", "付款日期", "M-Pesa 交易码", "备注"];
@@ -188,12 +194,12 @@ export function buildExportRows(items: ExportItem[], format: ExportFormat): { he
       item.amountKsh,
       dayOrEmpty(item.paidAt),
       item.mpesaCode,
-      phoneNote(item)
+      noteOf(item)
     ] as CsvCell[]);
     return { header: DETAIL_HEADER, rows };
   }
 
-  type Group = { sample: ExportItem; amountKsh: number; count: number };
+  type Group = { sample: ExportItem; amountKsh: number; count: number; adjusted: boolean };
   const groups = new Map<string, Group>();
   for (const item of items) {
     const key = [item.status, item.payeeKey, weekLabel(weekOf(item)), item.payoutId ?? ""].join("|");
@@ -201,8 +207,9 @@ export function buildExportRows(items: ExportItem[], format: ExportFormat): { he
     if (group) {
       group.amountKsh += item.amountKsh;
       group.count += 1;
+      if (item.kind === "ADJUSTMENT") group.adjusted = true;
     } else {
-      groups.set(key, { sample: item, amountKsh: item.amountKsh, count: 1 });
+      groups.set(key, { sample: item, amountKsh: item.amountKsh, count: 1, adjusted: item.kind === "ADJUSTMENT" });
     }
   }
   const ordered = [...groups.values()].sort((a, b) =>
@@ -211,7 +218,7 @@ export function buildExportRows(items: ExportItem[], format: ExportFormat): { he
     || a.sample.payeeType.localeCompare(b.sample.payeeType)
     || b.amountKsh - a.amountKsh
     || a.sample.name.localeCompare(b.sample.name));
-  const rows = ordered.map(({ sample, amountKsh, count }) => [
+  const rows = ordered.map(({ sample, amountKsh, count, adjusted }) => [
     STATUS_LABEL[sample.status],
     TYPE_LABEL[sample.payeeType],
     sample.name,
@@ -221,7 +228,7 @@ export function buildExportRows(items: ExportItem[], format: ExportFormat): { he
     weekLabel(weekOf(sample)),
     dayOrEmpty(sample.paidAt),
     sample.mpesaCode,
-    phoneNote(sample)
+    [adjusted ? "含换货调整，详见明细" : "", phoneNote(sample)].filter(Boolean).join("；")
   ] as CsvCell[]);
   return { header: SUMMARY_HEADER, rows };
 }
