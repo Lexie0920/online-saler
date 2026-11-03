@@ -11,9 +11,22 @@
  * reads the database lives in operations-after-sales.service.ts.
  */
 import { NAIROBI_OFFSET_MS, nairobiDay } from "./operations-payout-sheet";
-import { exportCsv, type CsvCell } from "./operations-payout-export";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+type CsvCell = string | number | null;
+
+/** One CSV cell. A name or note that Excel would read as a formula is turned into plain text. */
+function csvCell(value: CsvCell): string {
+  let text = value === null || value === undefined ? "" : String(value);
+  const startsLikeFormula = /^[=@\t\r]/.test(text) || (/^[+-]/.test(text) && !/^[+-]?[\d\s().-]+$/.test(text));
+  if (startsLikeFormula) text = `'${text}`;
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvText(header: string[], rows: CsvCell[][]): string {
+  return `${[header, ...rows].map((line) => line.map(csvCell).join(",")).join("\n")}\n`;
+}
 
 /** The most lines one file carries. Past this the file says it is cut short. */
 export const AFTER_SALES_EXPORT_ROW_LIMIT = 5000;
@@ -175,6 +188,6 @@ export function buildAfterSalesExport(items: AfterSalesExportItem[], options: Af
       toRefundKsh: items.filter(needsRefund).reduce((sum, item) => sum + (item.refundApprovedKsh ?? 0) - item.refundedKsh, 0),
       truncated
     },
-    csv: exportCsv(AFTER_SALES_EXPORT_HEADER, rows)
+    csv: csvText(AFTER_SALES_EXPORT_HEADER, rows)
   };
 }
