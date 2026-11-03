@@ -1051,6 +1051,7 @@ model Order {
   customerServiceCases CustomerServiceCase[]
   customerServiceNotes CustomerServiceNote[]
   afterSaleReturns     AfterSaleReturn[]
+  exchanges            OrderExchange[]
   refundRequests       RefundRequest[]
   afterSaleEvents      AfterSaleEvent[]
   refunds              RefundRecord[]
@@ -2057,6 +2058,38 @@ model RefundRecord {
 
   @@index([orderId, recordedAt])
   @@index([kind, recordedAt])
+}
+
+enum OrderExchangeKind {
+  /// An ordinary swap, no discount.
+  STANDARD
+  /// The customer meant to return the item; staff ticked "return to exchange".
+  RETURN_TO_EXCHANGE
+}
+
+/// One swap of a garment on an order for another garment (owner request,
+/// 2026-11-03). The order line keeps its place and takes the new garment; this
+/// row is the permanent record of what it used to hold and why it changed.
+model OrderExchange {
+  id                     String            @id @default(uuid())
+  orderId                String
+  orderItemId            String
+  kind                   OrderExchangeKind @default(STANDARD)
+  oldProductId           String
+  newProductId           String
+  oldPriceKsh            Int
+  newPriceKsh            Int
+  /// What the customer pays on top. Step 1 exchanges are same-price, so zero.
+  topUpKsh               Int               @default(0)
+  /// Only a RETURN_TO_EXCHANGE carries a discount.
+  discountKsh            Int               @default(0)
+  reason                 String
+  performedByAdminUserId String
+  order                  Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  createdAt              DateTime          @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([createdAt])
 }
 
 model FulfillmentNode {

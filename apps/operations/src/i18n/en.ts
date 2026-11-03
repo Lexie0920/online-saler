@@ -610,6 +610,17 @@ export const enDictionary: Record<string, string> = {
   "导出付款清单": "Export the payment list",
   "导出付款清单失败。": "Could not export the payment list.",
   "导出退货记录": "Export returns record",
+  "换货": "Exchange",
+  "换货失败 ({status})": "Exchange failed ({status})",
+  "换货失败，请刷新后再试。": "Could not exchange the item. Reload and try again.",
+  "已换货。拣货单已更新为新衣服。": "Item exchanged. The picking task now expects the new garment.",
+  "把订单里的一件衣服换成另一件同价的衣服。只适用于已付款、还没开始拣货的订单。换更贵、更便宜或已送达的订单暂不支持。":
+    "Swap one garment on the order for another at the same price. Only for paid orders that have not started picking. Dearer or cheaper items and delivered orders are not supported yet.",
+  "要换掉的衣服": "Item to swap out",
+  "新衣服的条码": "Barcode of the new item",
+  "扫码或输入条码": "Scan or type the barcode",
+  "换货原因": "Reason for the exchange",
+  "确认换货": "Confirm exchange",
   "每件退回的衣服一行：原因、经手人、退款进度。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。":
     "One line per returned garment: reason, who handled it, refund progress. Leave the dates empty for the last 30 days. The file has customer names and phone numbers, so keep it internal.",
   "只看已批准、还没退款的": "Only approved refunds not yet paid out",

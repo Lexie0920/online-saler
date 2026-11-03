@@ -38,6 +38,7 @@
 /apps/api/src/operations/*fulfillment*                 @ericye666666-cmd
 /apps/api/src/operations/operations-after-sales*       @ericye666666-cmd
 /apps/api/src/operations/operations-refund-request*    @ericye666666-cmd
+/apps/api/src/operations/operations-exchange*          @ericye666666-cmd
 /apps/api/src/operations/*deposit*                     @ericye666666-cmd
 /apps/api/src/operations/*commission*                  @ericye666666-cmd
 /apps/api/src/operations/*payout*                      @ericye666666-cmd

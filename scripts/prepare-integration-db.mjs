@@ -36,7 +36,8 @@ const migrations = [
   "20260926100000_return_reason_not_satisfied",
   "20261014120000_weekly_payouts",
   "20261015090000_payout_batches",
-  "20261102150000_after_sale_return_photos"
+  "20261102150000_after_sale_return_photos",
+  "20261103120000_order_exchanges"
 ];
 const raw = process.env.MVP_INTEGRATION_DATABASE_URL;
 if (!raw) throw new Error("MVP_INTEGRATION_DATABASE_URL must name a disposable local test database.");

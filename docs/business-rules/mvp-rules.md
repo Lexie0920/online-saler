@@ -174,6 +174,35 @@ download it, and each download writes an audit entry
 (`GET operations/after-sales/export`). It is read-only. Columns for exchanges are
 already in the file and stay empty until exchanges exist.
 
+## Exchanges
+
+2026-11-03 (owner request, step 1 of 3): on the order page, a 换货 card swaps one
+garment on an order for another. Exchange is its own action; the returns and
+refunds buttons only handle returns.
+
+Step 1 allows it only when the order is fully paid and picking has not started
+(no scan yet, the old garment still waiting as PAID), and the new garment is on
+sale and costs exactly the same. A cheaper garment is refused (use a return and
+refund), a dearer one is refused until top-ups exist, and an order that is
+deposit-only, picking, packed or delivered is refused with the reason. The old
+garment goes straight back to AVAILABLE and stays listed (it never left the
+shelf, so it is not re-reviewed); the new garment becomes PAID for the order and
+disappears from the shop. Both stock changes, the order line's snapshot, the
+picking task's expected barcode and an `OrderExchange` history row are written in
+one transaction under the order lock; the new garment is claimed with a
+conditional update so two people cannot take it at once. Same price means the
+order total, payments and affiliate commission do not change. It needs the
+`orders.after-sale` permission and a reason, and writes an audit entry.
+
+Planned, not built: a dearer garment with the customer paying the difference
+(M-Pesa), exchanges on delivered orders within 3 days (old garment returned with
+photos and reviewed before the new one is sent, then relisted directly), and a
+"return to exchange" option worth KSh 80 off the top-up, ticked by staff with a
+reason, once per order. Commission is always calculated on what the customer
+actually paid; a commission already paid out is corrected as a negative
+adjustment line in the next commission export. Refunds are capped at what was
+actually paid.
+
 ## Refunds
 
 - The system never moves money. A refund is executed in M-Pesa first and then

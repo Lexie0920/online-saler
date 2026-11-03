@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Get, Headers, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { OperationsAccessService } from "./operations-access.service";
 import { OperationsAfterSalesService, type AfterSalesInput } from "./operations-after-sales.service";
+import { OperationsExchangeService, type ExchangeInput } from "./operations-exchange.service";
 
 /** What a store is still waiting to get back over the counter. */
 @Controller("operations/nodes/:nodeId/returns")
@@ -22,6 +23,17 @@ export class OperationsAfterSalesExportController {
   @Get("export")
   async exportList(@Headers("authorization") authorization: string | undefined, @Query("from") from?: string, @Query("to") to?: string, @Query("filter") filter?: string) {
     return this.service.exportList({ adminUserId: await this.access.requireAccessToken(authorization), from, to, filter });
+  }
+}
+
+/** Swap a garment on a paid order for another. */
+@Controller("operations/orders/:orderId/exchange")
+export class OperationsExchangeController {
+  constructor(private readonly service: OperationsExchangeService, private readonly access: OperationsAccessService) {}
+
+  @Post()
+  async exchange(@Headers("authorization") authorization: string | undefined, @Param("orderId") orderId: string, @Body() body: ExchangeInput) {
+    return this.service.exchange(orderId, body ?? {}, await this.access.requireAccessToken(authorization));
   }
 }
 
