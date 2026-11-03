@@ -83,7 +83,7 @@ export function ExchangePanel({ order, session, onOrderChanged }: { order: Excha
         </label>
         <label className="flex flex-col gap-1 text-sm">
           {t("新衣服的条码")}
-          <Input value={newBarcode} onChange={(event) => setNewBarcode(event.target.value)} placeholder={t("扫码或输入条码")} />
+          <Input value={newBarcode} onChange={(event) => setNewBarcode(event.target.value)} placeholder={t("扫码或输入新衣服的条码")} />
         </label>
         <label className="flex flex-col gap-1 text-sm">
           {t("换货原因")}

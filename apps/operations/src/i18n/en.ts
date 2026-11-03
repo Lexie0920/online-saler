@@ -612,6 +612,8 @@ export const enDictionary: Record<string, string> = {
   "导出退货记录": "Export returns record",
   "所选日期范围内没有退货记录。": "There are no returns in the selected dates.",
   "退货记录导出失败，请刷新后再试。": "Could not export the returns record. Reload and try again.",
+  "退货记录的开始日期": "Returns start date",
+  "退货记录的结束日期": "Returns end date",
   "换货": "Exchange",
   "换货失败 ({status})": "Exchange failed ({status})",
   "换货失败，请刷新后再试。": "Could not exchange the item. Reload and try again.",
@@ -620,7 +622,7 @@ export const enDictionary: Record<string, string> = {
     "Swap one garment on the order for another at the same price. Only for paid orders that have not started picking. Dearer or cheaper items and delivered orders are not supported yet.",
   "要换掉的衣服": "Item to swap out",
   "新衣服的条码": "Barcode of the new item",
-  "扫码或输入条码": "Scan or type the barcode",
+  "扫码或输入新衣服的条码": "Scan or type the new item's barcode",
   "换货原因": "Reason for the exchange",
   "确认换货": "Confirm exchange",
   "每件退回的衣服一行：原因、经手人、退款进度。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。":
