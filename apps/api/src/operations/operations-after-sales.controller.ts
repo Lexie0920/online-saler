@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, Param, Post, Req, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { OperationsAccessService } from "./operations-access.service";
 import { OperationsAfterSalesService, type AfterSalesInput } from "./operations-after-sales.service";
 
@@ -10,6 +10,18 @@ export class OperationsNodeReturnsController {
   @Get()
   async toReceive(@Headers("authorization") authorization: string | undefined, @Param("nodeId") nodeId: string) {
     return this.service.returnsToReceive(nodeId, await this.access.requireAccessToken(authorization));
+  }
+}
+
+/** The returns record sheet for finance and review. Read-only. */
+@Controller("operations/after-sales")
+export class OperationsAfterSalesExportController {
+  constructor(private readonly service: OperationsAfterSalesService, private readonly access: OperationsAccessService) {}
+
+  /** from/to are Nairobi dates (YYYY-MM-DD, default last 30 days); filter=all|to-refund. */
+  @Get("export")
+  async exportList(@Headers("authorization") authorization: string | undefined, @Query("from") from?: string, @Query("to") to?: string, @Query("filter") filter?: string) {
+    return this.service.exportList({ adminUserId: await this.access.requireAccessToken(authorization), from, to, filter });
   }
 }
 

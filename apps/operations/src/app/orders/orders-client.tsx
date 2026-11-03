@@ -57,6 +57,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ORDER_STATUS_TABS, type OrderStatusTab } from "./order-center-routes";
 import { AfterSalesPanel } from "./after-sales-panel";
+import { ReturnsExportButton } from "./returns-export-button";
 import { RiderFeePicker, type RiderFeeKsh } from "./rider-fee";
 import { operationsRequester } from "@/lib/operations-request";
 import { operationsFormatLocale, t } from "@/i18n/runtime";
@@ -445,6 +446,7 @@ export function OrderCenterPage({ scope }: { scope: Scope }) {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title={t(meta.title)} description={t(meta.description)}>
+        {scope === "after-sales" && (hasPermission(session, "orders.refund") || hasPermission(session, "customer-service.refund-approve") || hasPermission(session, "action.customer-service.approve")) ? <ReturnsExportButton accessToken={accessToken} /> : null}
         <Button variant="outline" disabled={busy} onClick={() => void load()}>
           <RefreshCwIcon data-icon="inline-start" />{t("刷新")}
         </Button>

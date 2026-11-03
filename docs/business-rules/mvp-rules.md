@@ -163,6 +163,17 @@ path reverses the affiliate commission, updates the return status and applies
 the restock rules. Returns accepted before this rule have no request and keep
 the old behaviour. Refunds are still made by hand in M-Pesa.
 
+2026-11-03 (owner request): the 售后订单 page has an 导出退货记录 button that
+downloads a CSV (opens in Excel) with one line per returned garment in a date
+window (default last 30 days): reason, who requested, received and approved it,
+photo count, refund request status, amount approved and refunded, M-Pesa
+reference. A tick-box limits it to approved refunds not yet paid out, which is
+the list finance works from when sending refunds by hand. The file carries
+customer names and phone numbers, so only accounts with a refund permission can
+download it, and each download writes an audit entry
+(`GET operations/after-sales/export`). It is read-only. Columns for exchanges are
+already in the file and stay empty until exchanges exist.
+
 ## Refunds
 
 - The system never moves money. A refund is executed in M-Pesa first and then

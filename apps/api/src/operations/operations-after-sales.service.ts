@@ -6,6 +6,10 @@ import { assertRefundAmount, assertReturnPhotoCount, refundGate, assertReturnWin
 import { ProductImageStorageService } from "../product/product-image-storage.service";
 import { refreshWarehouseLocationStatuses, WAREHOUSE_OCCUPYING_STATUSES } from "./warehouse-capacity";
 import { scopedNodeId, storeScopeFor } from "./store-scope";
+import { AFTER_SALES_EXPORT_ROW_LIMIT, buildAfterSalesExport, parseAfterSalesExportOptions, type AfterSalesExportInput, type AfterSalesExportItem } from "./operations-after-sales-export";
+
+/** Who may download the returns sheet: it carries customer names and phone numbers. */
+const EXPORT_PERMISSIONS = ["orders.refund", "customer-service.refund-approve", "action.customer-service.approve"];
 
 export type AfterSalesInput = {
   idempotencyKey?: string; note?: string; orderItemId?: string; reason?: string; measurementDifferenceCm?: number;
@@ -30,6 +34,88 @@ export class OperationsAfterSalesService {
     await this.access.requirePermission(adminUserId, "orders.view");
     if (!await prisma.order.findUnique({ where: { id: orderId }, select: { id: true } })) throw new NotFoundException("Order was not found.");
     return { returns: await prisma.afterSaleReturn.findMany({ where: { orderId }, include: RETURN_INCLUDE, orderBy: { requestedAt: "asc" } }) };
+  }
+
+  /**
+   * The returns record sheet: one line per returned garment in a date window, or only
+   * those whose refund is approved and still to be sent. Read-only, but it carries
+   * customer names and phone numbers, so it needs a refund permission and leaves an
+   * audit entry saying who downloaded what.
+   */
+  async exportList(input: AfterSalesExportInput & { adminUserId: string }) {
+    const session = await this.access.session(input.adminUserId);
+    if (!session.adminUser || !EXPORT_PERMISSIONS.some((code) => session.permissions.includes(code))) {
+      throw new ForbiddenException("This admin account does not have permission for this operation.");
+    }
+    let options: ReturnType<typeof parseAfterSalesExportOptions>;
+    try {
+      options = parseAfterSalesExportOptions(input);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "Invalid export options.");
+    }
+    const found = await prisma.afterSaleReturn.findMany({
+      where: { requestedAt: { gte: options.start, lt: options.end } },
+      orderBy: { requestedAt: "asc" },
+      take: AFTER_SALES_EXPORT_ROW_LIMIT + 1,
+      include: {
+        orderItem: { select: { lineTotalKsh: true, snapshot: { select: { title: true, barcode: true } } } },
+        order: { select: { orderNumber: true, customer: { select: { displayName: true, phone: true } } } },
+        photos: { select: { id: true } },
+        refundRequests: { orderBy: { requestedAt: "desc" }, take: 1 },
+        refunds: { orderBy: { recordedAt: "asc" } }
+      }
+    });
+    const truncated = found.length > AFTER_SALES_EXPORT_ROW_LIMIT;
+    const records = truncated ? found.slice(0, AFTER_SALES_EXPORT_ROW_LIMIT) : found;
+    const staffIds = new Set<string>();
+    for (const record of records) {
+      for (const id of [record.requestedByAdminUserId, record.receivedByAdminUserId, record.refundRequests[0]?.reviewedByAdminUserId]) if (id) staffIds.add(id);
+    }
+    const staff = staffIds.size ? await prisma.adminUser.findMany({ where: { id: { in: [...staffIds] } }, select: { id: true, name: true } }) : [];
+    const nameOf = (id: string | null | undefined) => (id ? staff.find((person) => person.id === id)?.name ?? null : null);
+    const items: AfterSalesExportItem[] = records.map((record) => {
+      const request = record.refundRequests[0] ?? null;
+      const last = record.refunds[record.refunds.length - 1] ?? null;
+      return {
+        type: "RETURN",
+        requestedAt: record.requestedAt,
+        completedAt: request?.completedAt ?? null,
+        orderNumber: record.order.orderNumber,
+        barcode: record.orderItem.snapshot?.barcode ?? null,
+        title: record.orderItem.snapshot?.title ?? "",
+        reason: record.reason,
+        note: record.requestNote,
+        customerName: record.order.customer?.displayName ?? null,
+        customerPhone: record.order.customer?.phone ?? null,
+        returnStatus: record.status,
+        itemPriceKsh: record.orderItem.lineTotalKsh,
+        refundRequestStatus: request?.status ?? null,
+        refundApprovedKsh: request && request.status !== RefundRequestStatus.REJECTED && request.status !== RefundRequestStatus.CANCELLED ? request.amountKsh : null,
+        refundedKsh: record.refunds.reduce((sum, refund) => sum + refund.amountKsh, 0),
+        refundedAt: last?.refundedAt ?? null,
+        mpesaReference: last?.externalReference ?? null,
+        requestedBy: nameOf(record.requestedByAdminUserId),
+        receivedBy: nameOf(record.receivedByAdminUserId),
+        approvedBy: nameOf(request?.reviewedByAdminUserId),
+        photoCount: record.photos.length
+      };
+    });
+    const file = buildAfterSalesExport(items, options, truncated);
+    await prisma.auditLog.create({
+      data: {
+        actorType: ActorType.EMPLOYEE,
+        actorId: session.adminUser.linkedEmployeeId ?? null,
+        actorAdminUserId: session.adminUser.id,
+        sourceApp: SourceApp.OPERATIONS,
+        module: "after-sales",
+        entityType: "AfterSaleReturnExport",
+        entityId: file.fileName,
+        action: "EXPORT",
+        afterJson: { filter: options.filter, from: options.firstDay, to: options.lastDay, lines: file.lineCount, truncated },
+        reason: "Downloaded the returns record sheet."
+      }
+    });
+    return file;
   }
 
   /**
