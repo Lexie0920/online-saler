@@ -610,6 +610,8 @@ export const enDictionary: Record<string, string> = {
   "导出付款清单": "Export the payment list",
   "导出付款清单失败。": "Could not export the payment list.",
   "导出退货记录": "Export returns record",
+  "所选日期范围内没有退货记录。": "There are no returns in the selected dates.",
+  "退货记录导出失败，请刷新后再试。": "Could not export the returns record. Reload and try again.",
   "换货": "Exchange",
   "换货失败 ({status})": "Exchange failed ({status})",
   "换货失败，请刷新后再试。": "Could not exchange the item. Reload and try again.",

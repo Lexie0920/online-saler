@@ -54,13 +54,13 @@ export function ReturnsExportButton(props: { accessToken: string; disabled?: boo
         query: { from: from || undefined, to: to || undefined, filter: toRefundOnly ? "to-refund" : "all" }
       });
       if (result.lineCount === 0) {
-        setMessage(t("所选范围没有可导出的内容。"));
+        setMessage(t("所选日期范围内没有退货记录。"));
         return;
       }
       downloadCsv(result.fileName, result.csv);
       setMessage(result.summary.truncated ? t("文件只包含前 5000 行，请缩小日期范围后再导出。") : t("已导出 {count} 行。", { count: result.lineCount }));
     } catch (caught) {
-      setMessage(caught instanceof Error ? caught.message : t("导出失败，请刷新后再试。"));
+      setMessage(caught instanceof Error ? caught.message : t("退货记录导出失败，请刷新后再试。"));
     } finally {
       setBusy(false);
     }
