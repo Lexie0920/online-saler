@@ -54,13 +54,13 @@ export function ReturnsExportButton(props: { accessToken: string; disabled?: boo
         query: { from: from || undefined, to: to || undefined, filter: toRefundOnly ? "to-refund" : "all" }
       });
       if (result.lineCount === 0) {
-        setMessage(t("所选范围没有可导出的内容。"));
+        setMessage(t("所选日期范围内没有退货记录。"));
         return;
       }
       downloadCsv(result.fileName, result.csv);
       setMessage(result.summary.truncated ? t("文件只包含前 5000 行，请缩小日期范围后再导出。") : t("已导出 {count} 行。", { count: result.lineCount }));
     } catch (caught) {
-      setMessage(caught instanceof Error ? caught.message : t("导出失败，请刷新后再试。"));
+      setMessage(caught instanceof Error ? caught.message : t("退货记录导出失败，请刷新后再试。"));
     } finally {
       setBusy(false);
     }
@@ -76,9 +76,9 @@ export function ReturnsExportButton(props: { accessToken: string; disabled?: boo
           <div className="font-medium">{t("导出退货记录")}</div>
           <p className="text-muted-foreground">{t("每件退回的衣服一行：原因、经手人、退款进度。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。")}</p>
           <div className="flex items-center gap-2">
-            <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} aria-label={t("开始日期")} />
+            <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} aria-label={t("退货记录的开始日期")} />
             <span>–</span>
-            <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} aria-label={t("结束日期")} />
+            <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} aria-label={t("退货记录的结束日期")} />
           </div>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={toRefundOnly} onChange={(event) => setToRefundOnly(event.target.checked)} />

@@ -610,6 +610,10 @@ export const enDictionary: Record<string, string> = {
   "导出付款清单": "Export the payment list",
   "导出付款清单失败。": "Could not export the payment list.",
   "导出退货记录": "Export returns record",
+  "所选日期范围内没有退货记录。": "There are no returns in the selected dates.",
+  "退货记录导出失败，请刷新后再试。": "Could not export the returns record. Reload and try again.",
+  "退货记录的开始日期": "Returns start date",
+  "退货记录的结束日期": "Returns end date",
   "每件退回的衣服一行：原因、经手人、退款进度。日期留空为最近 30 天。文件含顾客姓名和电话，请勿外传。":
     "One line per returned garment: reason, who handled it, refund progress. Leave the dates empty for the last 30 days. The file has customer names and phone numbers, so keep it internal.",
   "只看已批准、还没退款的": "Only approved refunds not yet paid out",
